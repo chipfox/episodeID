@@ -105,6 +105,7 @@ def status():
     return {"version": __version__, "build": _build_info(), "media_root": str(MEDIA_ROOT),
             "tvdb": bool(s["tvdb_api_key"]), "opensubtitles": bool(s["opensubtitles_api_key"]),
             "llm": llm.available(), "whisper": s["whisper_enabled"],
+            "whisper_backend": s["whisper_backend"],
             "titlecards": bool(s["titlecard_enabled"] and titlecard.available()),
             "sonarr": bool(s["sonarr_url"] and s["sonarr_api_key"])}
 
@@ -349,11 +350,15 @@ def test_service(service: str):
                 msg += " " + st["decode_note"]
             return {"ok": True, "message": msg}
         if service == "whisper":
+            from . import transcribe as tr
+            if tr.backend_name() == "openai":
+                if not s["whisper_base_url"] or not s["whisper_remote_model"]:
+                    return {"ok": False, "message": "Set the remote base URL and model first."}
+                return {"ok": True, "message": tr.test_remote()}
             import importlib.util
             ok = importlib.util.find_spec("faster_whisper") is not None
             if not ok:
                 return {"ok": False, "message": "faster-whisper is not installed in this image"}
-            from . import transcribe as tr
             tr._load()
             model, device, compute = tr._model_key
             gpu = titlecard.gpu_info()

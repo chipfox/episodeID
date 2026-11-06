@@ -1,5 +1,11 @@
-"""Whisper transcription via faster-whisper. The model is loaded once and kept
-in memory; models are downloaded into /cache/whisper on first use.
+"""Audio transcription.
+
+The default backend is faster-whisper running in this container.  An
+OpenAI-compatible remote backend is also supported: it uploads a compressed,
+mono audio track to ``/audio/transcriptions`` and consumes timestamped
+segments from the response.  That lets a LAN service host Whisper, Parakeet,
+Canary, or another ASR model without adding its heavyweight runtime to the
+EpisodeID image.
 
 Audio is decoded with the ffmpeg binary rather than faster-whisper's built-in
 PyAV decoder: faster-whisper 1.2.x calls av.open(metadata_errors=...), which
@@ -7,11 +13,14 @@ newer PyAV releases removed, and ffmpeg also handles every container/codec
 the library might hold."""
 from __future__ import annotations
 
+import io
 import re
 import subprocess
 import threading
+import wave
 from pathlib import Path
 
+import httpx
 import numpy as np
 
 from .config import CACHE_DIR, get_settings
@@ -23,6 +32,33 @@ _model = None
 _model_key = None
 _lock = threading.Lock()
 _gpu_error: str | None = None  # set when GPU transcription failed; CPU is used afterwards
+
+
+def _backend(settings: dict | None = None) -> str:
+    """Return the normalized transcription backend name."""
+    s = settings or get_settings()
+    value = str(s.get("whisper_backend") or "local").strip().lower()
+    return "openai" if value in {"openai", "remote", "openai-compatible", "api"} else "local"
+
+
+def backend_name() -> str:
+    """The backend shown in status and diagnostics."""
+    return _backend()
+
+
+def _transcription_model(settings: dict | None = None) -> str:
+    s = settings or get_settings()
+    if _backend(s) == "openai":
+        return str(s.get("whisper_remote_model") or "whisper-1").strip() or "whisper-1"
+    return str(s.get("whisper_model") or "small").strip() or "small"
+
+
+def source_label(settings: dict | None = None) -> str:
+    """Stable cache/plan label identifying the ASR implementation used."""
+    s = settings or get_settings()
+    if _backend(s) == "openai":
+        return f"remote {_transcription_model(s)}"
+    return f"whisper {_transcription_model(s)}"
 
 
 def _load():
@@ -93,11 +129,175 @@ def decode_audio(video: Path, lang: str = "") -> np.ndarray:
     return np.frombuffer(r.stdout, dtype=np.float32).copy()
 
 
+def _remote_endpoint(settings: dict) -> str:
+    base = str(settings.get("whisper_base_url") or "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError("WHISPER_BASE_URL is required when WHISPER_BACKEND=openai")
+    return base if base.endswith("/audio/transcriptions") else f"{base}/audio/transcriptions"
+
+
+def _encode_remote_audio(video: Path, lang: str) -> bytes:
+    """Encode a broadly accepted, compact upload for OpenAI-compatible APIs."""
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", str(video),
+           "-map", _pick_audio_stream(video, lang), "-vn", "-sn", "-dn",
+           "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "libmp3lame",
+           "-b:a", "64k", "-f", "mp3", "-"]
+    r = subprocess.run(cmd, capture_output=True, timeout=3600)
+    if r.returncode != 0 or not r.stdout:
+        raise RuntimeError(f"ffmpeg could not encode audio for remote transcription: "
+                           f"{r.stderr.decode('utf-8', 'replace').strip()[-300:]}")
+    return r.stdout
+
+
+def _float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _remote_cues(payload, total: float) -> list[Cue]:
+    """Accept verbose_json segments, word timestamps, or a plain text response."""
+    if isinstance(payload, list):
+        payload = {"segments": payload}
+    if not isinstance(payload, dict):
+        payload = {"text": str(payload or "")}
+
+    segments = payload.get("segments")
+    if isinstance(segments, list):
+        cues = []
+        for i, segment in enumerate(segments):
+            if not isinstance(segment, dict):
+                continue
+            text = str(segment.get("text") or "").strip()
+            if not text:
+                continue
+            start = max(0.0, _float(segment.get("start")))
+            end = _float(segment.get("end"))
+            if end <= start:
+                next_start = (_float(segments[i + 1].get("start"))
+                              if i + 1 < len(segments) and isinstance(segments[i + 1], dict)
+                              else 0.0)
+                end = next_start if next_start > start else max(total, start + 1.0)
+            cues.append(Cue(start, end, text))
+        if cues:
+            return cues
+
+    # A few compatible servers expose words but omit segments. Group them into
+    # modest chunks so matching still has useful time locality.
+    words = payload.get("words")
+    if isinstance(words, list):
+        cues, current = [], []
+        current_start = current_end = 0.0
+        for word in words:
+            if not isinstance(word, dict) or not str(word.get("word") or "").strip():
+                continue
+            start = max(0.0, _float(word.get("start"), current_end))
+            end = _float(word.get("end"), start + 0.5)
+            if not current:
+                current_start = start
+            current.append(str(word.get("word")).strip())
+            current_end = max(end, start + 0.1)
+            if current_end - current_start >= 8.0 or len(current) >= 32:
+                cues.append(Cue(current_start, current_end, " ".join(current)))
+                current = []
+        if current:
+            cues.append(Cue(current_start, current_end, " ".join(current)))
+        if cues:
+            return cues
+
+    text = str(payload.get("text") or "").strip()
+    if text:
+        # Preserve usable text even when a minimal server does not return
+        # timestamps. A timestamped response remains strongly preferred.
+        return [Cue(0.0, max(total, 1.0), text)]
+    raise RuntimeError("remote transcription returned no text or timestamped segments")
+
+
+def _remote_transcribe(video: Path, ctx=None) -> list[Cue]:
+    s = get_settings()
+    lang = s["whisper_language"] or ""
+    model = _transcription_model(s)
+    if ctx:
+        ctx.status(f"Remote transcription: {video.name}")
+    audio = _encode_remote_audio(video, lang)
+    if ctx:
+        ctx.check_cancel()
+        ctx.log(f"  uploading {video.name} to the remote transcription service ({model})…")
+    headers = {}
+    if s["whisper_api_key"]:
+        headers["Authorization"] = f"Bearer {s['whisper_api_key']}"
+    data = {"model": model, "response_format": "verbose_json"}
+    if lang:
+        data["language"] = lang
+    try:
+        timeout = max(1, int(s["whisper_remote_timeout"]))
+        response = httpx.post(
+            _remote_endpoint(s), headers=headers, data=data,
+            files={"file": (f"{video.stem}.mp3", audio, "audio/mpeg")}, timeout=timeout)
+    except (httpx.HTTPError, ValueError) as e:
+        raise RuntimeError(f"remote transcription request failed: {e}") from e
+    if response.status_code < 200 or response.status_code >= 300:
+        raise RuntimeError(f"remote transcription failed ({response.status_code}): "
+                           f"{response.text[:300]}")
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {"text": response.text}
+    total = _float(payload.get("duration")) if isinstance(payload, dict) else 0.0
+    if total <= 0:
+        try:
+            from .media_text import duration
+            total = duration(probe(video))
+        except Exception:  # noqa: BLE001
+            total = 0.0
+    cues = _remote_cues(payload, total)
+    if ctx:
+        ctx.check_cancel()
+        ctx.status(f"Remote transcription: {video.name} done")
+    return cues
+
+
+def _test_audio() -> bytes:
+    """Small valid WAV used by the Settings → Whisper connection test."""
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(SAMPLE_RATE)
+        wav.writeframes(b"\\0\\0" * (SAMPLE_RATE // 2))
+    return out.getvalue()
+
+
+def test_remote() -> str:
+    """Make a tiny real request so the UI test checks reachability and auth."""
+    s = get_settings()
+    model = _transcription_model(s)
+    data = {"model": model, "response_format": "json"}
+    headers = {}
+    if s["whisper_api_key"]:
+        headers["Authorization"] = f"Bearer {s['whisper_api_key']}"
+    try:
+        response = httpx.post(
+            _remote_endpoint(s), headers=headers, data=data,
+            files={"file": ("episodeid-test.wav", _test_audio(), "audio/wav")},
+            timeout=min(max(1, int(s["whisper_remote_timeout"])), 60))
+    except (httpx.HTTPError, ValueError) as e:
+        raise RuntimeError(f"remote transcription request failed: {e}") from e
+    if response.status_code < 200 or response.status_code >= 300:
+        raise RuntimeError(f"remote transcription failed ({response.status_code}): "
+                           f"{response.text[:300]}")
+    return f"Remote transcription endpoint replied for '{model}'."
+
+
 def transcribe(video: Path, ctx=None) -> list[Cue]:
     s = get_settings()
+    global _gpu_error, _model
+    if _backend(s) == "openai":
+        with _lock:
+            return _remote_transcribe(video, ctx)
     lang = s["whisper_language"] or None
     audio = decode_audio(video, lang or "")
-    global _gpu_error, _model
     with _lock:
         try:
             return _run(_load(), audio, lang, video, ctx)

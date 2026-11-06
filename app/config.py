@@ -29,12 +29,18 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "opensubtitles_password": ("", "OPENSUBTITLES_PASSWORD", True),
     "subtitle_language": ("en", "SUBTITLE_LANGUAGE", False),
     "sidecar_subtitles": (True, "SIDECAR_SUBTITLES", False),
-    # Whisper
+    # Transcription: local faster-whisper by default, or an OpenAI-compatible
+    # audio transcription endpoint (which can host Whisper, Parakeet, Canary, ...).
     "whisper_enabled": (True, "WHISPER_ENABLED", False),
+    "whisper_backend": ("local", "WHISPER_BACKEND", False),
     "whisper_model": ("small", "WHISPER_MODEL", False),
     "whisper_device": ("auto", "WHISPER_DEVICE", False),
     "whisper_compute_type": ("default", "WHISPER_COMPUTE_TYPE", False),
     "whisper_language": ("en", "WHISPER_LANGUAGE", False),
+    "whisper_base_url": ("", "WHISPER_BASE_URL", False),
+    "whisper_api_key": ("", "WHISPER_API_KEY", True),
+    "whisper_remote_model": ("whisper-1", "WHISPER_REMOTE_MODEL", False),
+    "whisper_remote_timeout": (3600, "WHISPER_REMOTE_TIMEOUT", False),
     # LLM (OpenAI-compatible; Ollama: http://host:11434/v1)
     "llm_enabled": (False, "LLM_ENABLED", False),
     "llm_base_url": ("http://ollama:11434/v1", "LLM_BASE_URL", False),

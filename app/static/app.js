@@ -1703,11 +1703,16 @@ async function renderSettings() {
     ${f("subtitle_language", "Subtitle language", "Two-letter code, e.g. en. Also used to pick embedded subtitle tracks.")}
     ${cb("sidecar_subtitles", "Use external subtitle sidecars", "Reads .srt, .ass, .ssa and .vtt files beside videos as dialogue evidence. Turn this off when Bazarr or another tool manages those files separately; EpisodeID will use embedded tracks or Whisper instead.")}
     ${test("opensubtitles")}</fieldset>
-  <fieldset><legend>Whisper (files without subtitles)</legend>
-    ${cb("whisper_enabled", "Enabled")}
-    ${sel("whisper_model", "Model", [["tiny", "tiny"], ["base", "base"], ["small", "small (recommended on CPU)"], ["medium", "medium"], ["large-v3", "large-v3 (GPU)"], ["distil-large-v3", "distil-large-v3"]], "Downloaded to /cache/whisper on first use. Larger is more accurate and slower.")}
-    ${sel("whisper_device", "Device", [["auto", "auto"], ["cpu", "CPU"], ["cuda", "NVIDIA GPU"]])}
-    ${sel("whisper_compute_type", "Compute type", [["default", "default (int8 on CPU, float16 on GPU)"], ["int8", "int8"], ["int8_float16", "int8_float16"], ["float16", "float16"], ["float32", "float32"]])}
+  <fieldset><legend>Whisper / transcription (files without subtitles)</legend>
+    ${cb("whisper_enabled", "Enabled", "Used after embedded text subtitles when sidecars are disabled or absent.")}
+    ${sel("whisper_backend", "Backend", [["local", "Local faster-whisper"], ["openai", "Remote OpenAI-compatible ASR"]], "Remote mode sends compressed mono audio to an /audio/transcriptions endpoint. It can host Whisper, Parakeet, Canary or another compatible ASR model.")}
+    ${sel("whisper_model", "Local model", [["tiny", "tiny"], ["base", "base"], ["small", "small (recommended on CPU)"], ["medium", "medium"], ["large-v3", "large-v3 (GPU)"], ["distil-large-v3", "distil-large-v3"]], "Used only by the local backend; downloaded to /cache/whisper on first use.")}
+    ${sel("whisper_device", "Local device", [["auto", "auto"], ["cpu", "CPU"], ["cuda", "NVIDIA GPU"]], "Used only by the local faster-whisper backend.")}
+    ${sel("whisper_compute_type", "Local compute type", [["default", "default (int8 on CPU, float16 on GPU)"], ["int8", "int8"], ["int8_float16", "int8_float16"], ["float16", "float16"], ["float32", "float32"]], "Used only by the local faster-whisper backend.")}
+    ${f("whisper_base_url", "Remote base URL", "OpenAI-compatible base, e.g. http://whisper-host:8000/v1; the full /v1/audio/transcriptions URL is also accepted.")}
+    ${f("whisper_api_key", "Remote API key", "Optional; sent as a Bearer token.", "password")}
+    ${f("whisper_remote_model", "Remote model", "Passed as the model field, e.g. whisper-1, large-v3, nvidia/parakeet-tdt-0.6b-v3 or nvidia/canary-1b-v2.")}
+    ${f("whisper_remote_timeout", "Remote timeout (s)", "Maximum time for one uploaded file; increase for long episodes or a busy remote GPU.", "number")}
     ${f("whisper_language", "Spoken language", "e.g. en. Leave blank to auto-detect.")}
     ${test("whisper")}</fieldset>
   <fieldset><legend>Title cards</legend>

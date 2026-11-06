@@ -15,6 +15,10 @@ services:
       # - OPENSUBTITLES_USERNAME=
       # - OPENSUBTITLES_PASSWORD=
       # - SIDECAR_SUBTITLES=false  # ignore external subtitle files beside videos
+      # - WHISPER_BACKEND=openai  # use a remote OpenAI-compatible transcription API
+      # - WHISPER_BASE_URL=http://whisper:8000/v1
+      # - WHISPER_API_KEY=
+      # - WHISPER_REMOTE_MODEL=whisper-1
       # - SONARR_URL=http://sonarr:8989
       # - SONARR_API_KEY=
       # - AUTH_USERNAME=   # set both to require a login for the web UI

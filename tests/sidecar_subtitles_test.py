@@ -46,6 +46,10 @@ assert second["cues"][0][2] == "embedded dialogue", second
 cached = media_text.cached_dialogue(video)
 assert cached is not None
 assert cached["source"] == "embedded #2"
+# Bazarr changing an ignored sidecar must not force another transcription cache.
+cache_key = media_text._cache_key(video)
+sidecar.write_text("1\n00:00:00,000 --> 00:00:02,000\nchanged ignored dialogue\n")
+assert media_text._cache_key(video) == cache_key
 
 # The documented environment variable is recognized and takes precedence over
 # the settings file.

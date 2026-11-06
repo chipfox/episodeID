@@ -3,12 +3,13 @@
 Order of preference when external sidecars are enabled:
   1. sidecar subtitle file next to the video (.srt/.ass/.ssa/.vtt)
   2. embedded text subtitle stream (subrip, ass, mov_text, webvtt)
-  3. Whisper transcription of the audio (also used for image-based subs)
+  3. configured transcription backend (local faster-whisper by default, or a
+     remote OpenAI-compatible ASR service)
 
 When sidecar subtitles are disabled, embedded text tracks are preferred and
-Whisper remains the fallback. Results are cached under /cache/text keyed by
-path+size+mtime; cached sidecar results are ignored when sidecars are disabled.
-"""
+transcription remains the fallback. Results are cached under /cache/text keyed
+by path+size+mtime and the active dialogue settings; cached sidecar results are
+ignored when sidecars are disabled."""
 from __future__ import annotations
 
 import hashlib
@@ -145,12 +146,21 @@ def _cache_key(path: Path) -> str:
     st = path.stat()
     # No path in the key: renames keep size+mtime, so Whisper transcripts survive an apply.
     key = f"{st.st_size}|{st.st_mtime_ns}"
-    # A sidecar subtitle added/changed later must invalidate the cache.
+    s = get_settings()
+    # A sidecar subtitle added/changed later must invalidate the cache only
+    # when sidecars are actually part of the evidence chain.
     stem = path.with_suffix("").name
-    for f in sorted(path.parent.glob(glob_escape(stem) + "*")):
-        if f.suffix.lower() in SUB_EXTS:
-            fs = f.stat()
-            key += f"|{f.name[len(stem):]}|{fs.st_size}|{fs.st_mtime_ns}"
+    if s["sidecar_subtitles"]:
+        for f in sorted(path.parent.glob(glob_escape(stem) + "*")):
+            if f.suffix.lower() in SUB_EXTS:
+                fs = f.stat()
+                key += f"|{f.name[len(stem):]}|{fs.st_size}|{fs.st_mtime_ns}"
+    # Switching between local Whisper and a remote model must not reuse a
+    # transcript produced by the previous backend. Do not include API secrets.
+    backend = str(s["whisper_backend"]).strip().lower()
+    key += (f"|sidecars:{int(bool(s['sidecar_subtitles']))}|transcriber:{backend}"
+            f"|local-model:{s['whisper_model']}|remote-model:{s['whisper_remote_model']}"
+            f"|language:{s['whisper_language']}|remote-url:{s['whisper_base_url']}")
     return hashlib.sha1(key.encode()).hexdigest()
 
 
@@ -244,12 +254,12 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     if result is None:
         result = extract_embedded(video, info, lang)
     if result is None and allow_whisper and s["whisper_enabled"]:
-        from .transcribe import transcribe
+        from . import transcribe as tr
         if ctx:
-            ctx.log(f"  no text subtitles; transcribing with Whisper ({s['whisper_model']})…")
-        cues = transcribe(video, ctx)
+            ctx.log(f"  no text subtitles; transcribing with {tr.source_label(s)}…")
+        cues = tr.transcribe(video, ctx)
         if cues:
-            result = (cues, f"whisper {s['whisper_model']}")
+            result = (cues, tr.source_label(s))
 
     if result is None:
         data = {"source": "none", "duration": dur, "cues": []}
