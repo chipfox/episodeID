@@ -91,7 +91,7 @@ A small live probe found that first-10-minute ASR produced distinctive dialogue 
 
 ### What the fast path may and may not claim
 
-- It may say **"probable SxxEyy from the first 10 minutes"** and put an unticked AI suggestion on the plan.
+- It may say **“probable SxxEyy from bounded sample windows”** and put an unticked AI suggestion on the plan. An unresolved first sample is rechecked in additional non-adjacent windows before it is called a review.
 - It may not claim that the entire file is verified when the file could contain multiple episodes, swapped parts, or an unexamined conflict.
 - It may not auto-apply a rename solely because Laya's probability is high; thresholds must be calibrated against labeled files and deterministic evidence.
 - A first 10-minute sample is often sufficient for ordinary single episodes because it contains plot-specific dialogue, but it is not guaranteed to contain a distinctive event: recaps, cold opens, generic procedural dialogue, credits, silence, or serialized setup can make it insufficient.
@@ -104,8 +104,8 @@ Laya is not called for ordinary high-confidence deterministic files. It is calle
 
 These are gates, not preferences. The existing full-file matcher is the only component that may produce trusted evidence for a rename, split, join, duplicate removal, or “correct” result.
 
-1. **Sample evidence may certify only a clear single-episode match.** A sampled segment keeps the matcher’s real `high`/`low` confidence. A `high` sample that agrees with the filename may produce `ok`; a `high` sample mismatch is an unticked rename suggestion; weak or multi-episode sample evidence stays `review`. Sample evidence must never authorize a split, join, duplicate removal, or other multi-file action.
-2. **The sample cannot claim the whole file.** The sampler returns its actual `sample_start` and `sample_end`; every sample segment is clipped to that window. `Matcher.match_file()` must receive the sample duration, not the full file duration. A segment must never inherit `end = file.duration` merely because the file is longer than the sample.
+1. **Sample evidence may certify only a clear single-episode match.** Each bounded sample window produces a high/low match vote. A `high` filename vote may produce `ok`; a rename requires the same alternate episode to win at least `DECISION_MISMATCH_WINDOWS` independent windows. Weak, sparse, story-part, non-target-language, or single-window evidence stays `review`. Sample evidence must never authorize a split, join, duplicate removal, or other multi-file action.
+2. **The sample cannot claim the whole file.** Every sampled window records its start, end, transcript source, candidate scores, and evidence type; `sample_end` covers all sampled windows. `Matcher.match_file()` must receive each window's sampled duration, not the full file duration. A segment must never inherit `end = file.duration` merely because the file is longer than the sample.
 3. **Multi-episode files require the full timeline.** The fast path must not produce `ok`, `rename`, `split`, `join`, or `aside` for a file whose filename claims multiple episodes, whose duration is materially longer than the TVDB runtime, or whose episode count cannot be established from the sample. Escalate to full-file matching.
 4. **One episode in the filename is not proof of one episode in the file.** A sample-only `ok` is allowed only when the matcher is `high`, the filename claims exactly one episode, and the duration is consistent with a single episode. Any multi-episode or runtime mismatch escalates to the full-file path.
 5. **Candidate cap must not hide the true answer.** Rank the complete reference index locally and union the filename/Sonarr claims before truncating. If the best supported candidate is outside the Laya pool, or no candidate clears the deterministic support floor, return review/`unknown`; never force Laya to choose among four weak candidates.
@@ -132,7 +132,7 @@ The first implementation is not complete until these tests pass alongside the ex
 
 The first sample is a separate evidence product; it must not overwrite or masquerade as a complete-file transcript.
 
-- Add `DECISION_SAMPLE_SECONDS=600` and `DECISION_SAMPLE_START=0` settings.
+- Add `DECISION_SAMPLE_SECONDS=600`, `DECISION_SAMPLE_START=0`, `DECISION_SAMPLE_EXPAND=true`, `DECISION_SAMPLE_MAX_WINDOWS=5`, and `DECISION_MISMATCH_WINDOWS=2` settings. Expansion starts on the first window plus non-adjacent windows at +20, +10, +40, and +30 minutes (clamped to the file) until enough evidence accumulates.
 - Add a sampler API such as `transcribe(video, ctx=None, start=0, duration=None)` (or a clearly named wrapper) that applies `-ss`/`-t` to both local decoding and remote ffmpeg encoding.
 - For remote ASR, translate returned cue times back to file-relative time by adding the sample start offset.
 - Include file identity, sample start/duration, ASR backend/model/language/URL, and the evidence schema revision in the sample cache key.
@@ -180,7 +180,7 @@ class EvidenceBundle:
 
 The bundle retains all local evidence for the UI/cache, but `decision.py` renders only bounded excerpts. The complete reference index is used locally for scoring and candidate retrieval; the rendered Laya input should normally stay below about 450 tokens: a few distinctive ASR snippets, 2–4 candidate-specific reference excerpts, concise deduplicated metadata, and a clearly marked sidecar excerpt only when it is relevant to a conflict.
 
-Every plan segment must also carry its evidence scope. Sample segments use this shape and must never be promoted to trusted evidence:
+Every plan segment must also carry its evidence scope. Sample segments remain labeled `scope: "sample"` and include their window/evidence metadata:
 
 ```json
 {
@@ -215,6 +215,9 @@ DECISION_MODEL=laya
 DECISION_TIMEOUT=30
 DECISION_SAMPLE_SECONDS=600
 DECISION_SAMPLE_START=0
+DECISION_SAMPLE_EXPAND=true
+DECISION_SAMPLE_MAX_WINDOWS=5
+DECISION_MISMATCH_WINDOWS=2
 DECISION_MIN_CONFIDENCE=0.15
 DECISION_MAX_CANDIDATES=4
 DECISION_MAX_INPUT_CHARS=800  # Laya's 512-token physical batch; keep a margin
@@ -442,8 +445,8 @@ For every unit, perform spec review before code-quality review. Do not paralleli
 - OpenSubtitles download is last resort, cached, quota-bounded, and provenance-aware.
 - Laya suggestions are reviewable and never automatically selected for Apply.
 - The original deterministic matcher, title-card logic, Sonarr release-name logic, Plan → Apply → Undo flow, and existing tests continue to work.
-- Sample-derived segments carry `scope: "sample"`/`confidence: "provisional"` and can never be treated as trusted `high` evidence.
-- No sample segment extends beyond the sampled window, and no sample-only result produces an `ok`, `split`, `join`, or `aside` for a multi-episode or runtime-mismatched file.
+- Sample-derived segments carry `scope: "sample"` and retain their evidence strength. Weak samples remain `provisional`; a high filename vote may produce `ok`, while a high multi-window alternate may produce an unticked rename suggestion.
+- No sample segment extends beyond the sampled windows, and no sample-only result produces a `split`, `join`, or `aside` for a multi-episode or runtime-mismatched file.
 - A sample-only rename of a misidentified single episode is available for human review but starts unticked.
 - When ASR is unavailable, validated embedded/diagnostic sidecar evidence still permits provisional identification instead of forcing `NO_TEXT`.
 - A true candidate outside the bounded Laya pool, or an `unknown` result, escalates to review rather than forcing a choice.
