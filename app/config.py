@@ -60,6 +60,7 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "decision_base_url": ("http://10.0.0.11:1234/v1", "DECISION_BASE_URL", False),
     "decision_model": ("laya", "DECISION_MODEL", False),
     "decision_timeout": (30, "DECISION_TIMEOUT", False),
+    "decision_min_confidence": (0.15, "DECISION_MIN_CONFIDENCE", False),
     "decision_max_candidates": (4, "DECISION_MAX_CANDIDATES", False),
     "decision_max_input_chars": (800, "DECISION_MAX_INPUT_CHARS", False),
     "decision_sample_seconds": (600, "DECISION_SAMPLE_SECONDS", False),

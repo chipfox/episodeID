@@ -45,7 +45,7 @@ def dialogue_text(cues: list, limit: int = 1400) -> str:
     return f"{text[:head]} … {text[-(limit - head):]}"
 
 
-def apply(file_result: dict, result: dict) -> None:
+def apply(file_result: dict, result: dict, accept: bool = True) -> None:
     """Attach a decision result without ever making it trusted evidence."""
     code = result.get("code")
     file_result["decision"] = {
@@ -55,8 +55,9 @@ def apply(file_result: dict, result: dict) -> None:
         "confidence": result.get("confidence"),
         "probabilities": result.get("probabilities") or {},
         "unknown": bool(result.get("unknown")),
+        "accepted": bool(accept),
     }
-    if not code:
+    if not accept or not code:
         return
     segments = file_result.get("segments") or []
     if not segments:
@@ -90,9 +91,13 @@ def adjudicate(series: dict, file_result: dict, episodes: dict, ctx=None) -> dic
             ctx.log(f"  decision: {Path(file_result.get('rel', 'file')).name} — {e}")
         return None
     if result:
-        apply(file_result, result)
+        threshold = float(get_settings()["decision_min_confidence"])
+        confidence = float(result.get("confidence") or 0.0)
+        accept = bool(result.get("code")) and not result.get("unknown") and confidence >= threshold
+        apply(file_result, result, accept=accept)
         if ctx:
             what = result.get("code") or "unknown"
             ctx.log(f"  decision: {Path(file_result.get('rel', 'file')).name} → {what} "
-                    f"(confidence {result.get('confidence', 0):.2f})")
+                    f"(confidence {confidence:.2f})"
+                    + ("" if accept else f"; below the {threshold:.2f} trust floor — left as a suggestion"))
     return result
