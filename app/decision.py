@@ -34,11 +34,15 @@ def _endpoint(settings: dict | None = None) -> str:
 
 
 def _description(candidate: dict) -> str:
+    """One short line the model can actually read: a pre-computed distinctive
+    descriptor when the scan has one, otherwise title plus a clipped summary.
+    The matcher's numeric score is deliberately absent — TF-IDF points mean
+    nothing to the model and eat the tiny input budget."""
+    if candidate.get("descriptor"):
+        return str(candidate["descriptor"])
     parts = [candidate.get("title") or candidate["code"]]
     if candidate.get("overview"):
-        parts.append(str(candidate["overview"]).strip())
-    if candidate.get("score") is not None:
-        parts.append(f"matcher score {float(candidate['score']):.2f}")
+        parts.append(str(candidate["overview"]).strip()[:90])
     return " — ".join(parts)
 
 

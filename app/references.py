@@ -867,6 +867,149 @@ def verify_flagged(series: dict, ctx) -> dict:
     return result
 
 
+def _repair_file(tvdb_id: int) -> Path:
+    return refs_dir(tvdb_id) / "_repairs.json"
+
+
+def _load_repairs(tvdb_id: int) -> dict:
+    try:
+        return json.loads(_repair_file(tvdb_id).read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_repairs(tvdb_id: int, repairs: dict) -> None:
+    f = _repair_file(tvdb_id)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(repairs, indent=1))
+
+
+def _text_similarity(a: str, b: str) -> float:
+    """TF-IDF cosine between two transcripts — the same view verify_flagged uses."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    vec = TfidfVectorizer(lowercase=True, strip_accents="unicode", sublinear_tf=True,
+                          stop_words="english", token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z']+\b")
+    m = vec.fit_transform([a or "", b or ""])
+    return float((m @ m.T).toarray()[0][1])
+
+
+def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int = 4,
+                               similarity: float = 0.85) -> dict:
+    """One transcript filed under two episode numbers (a wiki page that covered
+    both, an upload duplicated) makes both episodes unprovable: either file
+    matches both references equally. That is not a matcher failure, and no model
+    can pick a winner between two copies of the same text — the fix is to go
+    find a real transcript.
+
+    Asks OpenSubtitles for each episode of a conflicting pair by its TVDB title
+    and replaces the duplicates only when the replacements are demonstrably not
+    each other's text. Manual references are never overwritten; a pair already
+    repaired (or whose replacement looked wrong) is left alone."""
+    tvdb_id = series["tvdb_id"]
+    from .evidence import Lexicon
+    refs_full = load_refs(tvdb_id)
+    eps = {ep_code(e["season"], e["episode"]): e for e in series.get("episodes") or []}
+    story = story or (lambda code: [code])
+    try:
+        lex = Lexicon(eps, {c: r["text"] for c, r in refs_full.items()},
+                      story=story, conflict_similarity=similarity)
+    except Exception as e:  # noqa: BLE001
+        ctx.log(f"Reference repair: couldn't compare references ({e}).")
+        return {"conflicts": 0, "replaced": 0}
+    pairs = lex.conflict_pairs()
+    out = {"conflicts": len(pairs), "replaced": 0}
+    if not pairs:
+        return out
+    manual = {c for c, r in refs_full.items() if str(r.get("source", "")).startswith("manual")}
+    repairs = _load_repairs(tvdb_id)
+    wanted: list[str] = []
+    for pair in pairs:
+        for code in pair["codes"]:
+            if code not in manual and code not in repairs and code in eps and code not in wanted:
+                wanted.append(code)
+    if not wanted:
+        ctx.log(f"Reference conflicts: {len(pairs)} pair(s) share a transcript, and none of them "
+                "can be replaced automatically (manual references or already repaired).")
+        return out
+    wanted = wanted[:max(2, int(max_downloads))]
+    os_ = OpenSubtitles()
+    if not os_.configured:
+        ctx.log(f"Reference conflicts: {len(pairs)} pair(s) share a transcript (" +
+                ", ".join("/".join(p["codes"]) for p in pairs[:6]) +
+                "); set an OpenSubtitles API key under Settings to look for replacements.")
+        return out
+    fetched: dict[str, dict] = {}
+    replaced = 0
+    try:
+        os_.login()
+        ctx.log(f"Reference repair: {len(pairs)} pair(s) share one transcript — searching "
+                f"OpenSubtitles for {', '.join(wanted)}.")
+        for code in wanted:
+            ctx.check_cancel()
+            ctx.status(f"Reference repair: {code} on OpenSubtitles")
+            try:
+                ref, note = fetch_opensubs(os_, series, eps[code], ctx)
+            except QuotaExhausted as e:
+                ctx.log(f"Reference repair: OpenSubtitles quota reached ({e}).")
+                break
+            except Exception as e:  # noqa: BLE001
+                ctx.log(f"{code}: reference repair failed ({e})")
+                continue
+            if ref:
+                fetched[code] = ref
+            else:
+                ctx.log(f"{code}: nothing to repair with — {note}")
+        old = load_refs(tvdb_id)
+        for pair in pairs:
+            a, b = pair["codes"]
+            na, nb = fetched.get(a), fetched.get(b)
+            if na and nb:
+                if _text_similarity(na["text"], nb["text"]) >= SAME_EPISODE_SCORE:
+                    ctx.log(f"{a}/{b}: OpenSubtitles' replacements still match each other — "
+                            "keeping the old references; a human needs to pick the transcripts")
+                    continue
+                for code, ref in ((a, na), (b, nb)):
+                    _replace_reference(tvdb_id, code, ref, repairs,
+                                       conflicted_with=(b if code == a else a))
+                    replaced += 1
+                ctx.log(f"{a}/{b} ✓ replaced the shared transcript with OpenSubtitles copies "
+                        "that clearly differ from each other")
+                continue
+            for code, new in ((a, na), (b, nb)):
+                if new is None:
+                    continue
+                other = b if code == a else a
+                current = (old.get(other) or {}).get("text") or ""
+                if current and _text_similarity(new["text"], current) >= SAME_EPISODE_SCORE:
+                    ctx.log(f"{code}: the replacement still resembles {other}'s reference — "
+                            "keeping the old one")
+                    continue
+                _replace_reference(tvdb_id, code, new, repairs, conflicted_with=other)
+                replaced += 1
+                ctx.log(f"{code} ✓ replaced with a transcript clearly different from {other}'s")
+    except OpenSubtitlesAuthError as e:
+        ctx.log(f"Reference repair: {e} — check Settings → OpenSubtitles.")
+    finally:
+        os_.close()
+        if replaced:
+            _save_repairs(tvdb_id, repairs)
+    out["replaced"] = replaced
+    return out
+
+
+def _replace_reference(tvdb_id: int, code: str, ref: dict, repairs: dict,
+                       conflicted_with: str) -> None:
+    """Record what the old reference was before overwriting, mark the new one with
+    the conflict it resolved, and remember the repair so later fetches don't redo it."""
+    from datetime import datetime, timezone
+    previous = _read_cached(tvdb_id, code) or {}
+    ref = {**ref, "repaired_conflict_with": conflicted_with}
+    _save(tvdb_id, code, ref)
+    repairs[code] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                     "conflicted_with": conflicted_with,
+                     "replaced_source": previous.get("source") or "none"}
+
+
 def ref_meta(tvdb_id: int) -> dict[str, dict]:
     """code -> where its reference came from and how far it can be trusted."""
     out = {}

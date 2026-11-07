@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import autocheck
-from . import adjudication, db, decision, fandom, llm, titlecard, tvdb
+from . import adjudication, db, decision, evidence, fandom, llm, titlecard, tvdb
 from .config import get_settings
 from .executor import (apply_plan, migrate_legacy_backup, sonarr_rescan, sonarr_series_type_note,
                        undo_apply)
@@ -17,7 +17,7 @@ from .media_text import (cached_dialogue, detect_language, duration, get_dialogu
                          sample_dialogue)
 from .planner import build_plan, list_videos
 from .references import (SAME_EPISODE_SCORE, detect_fandom_wiki, ep_code, load_refs, norm_title,
-                         refresh_references, renumber_references,
+                         refresh_references, renumber_references, repair_reference_conflicts,
                          verify_flagged, check_release_names)
 
 
@@ -188,6 +188,12 @@ def job_fetch_refs(ctx, params):
     result = refresh_references(series, ctx, force_codes=params.get("codes"),
                                 retry_misses=bool(params.get("retry_misses")),
                                 retry_codes=retry, only_codes=only)
+    if get_settings()["reference_repair"]:
+        ctx.status("Repairing references that share a transcript")
+        fresh = db.get_series(series["id"]) or series
+        eps_by_code = {ep_code(e["season"], e["episode"]): e for e in fresh["episodes"]}
+        result["repairs"] = repair_reference_conflicts(
+            fresh, ctx, story=lambda code: _story(eps_by_code, code))
     ctx.status("Cross-checking flagged OpenSubtitles references")
     result["names"] = check_release_names(db.get_series(series["id"]), ctx)
     result["verification"] = verify_flagged(db.get_series(series["id"]), ctx)
@@ -338,12 +344,20 @@ def _scored_sample_window(video: Path, matcher: Matcher, start: float, duration:
 
 
 def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: dict,
-                               settings: dict, required_mismatch: int) -> dict:
-    """Vote once per sample window, while treating story parts as non-opposing."""
+                               settings: dict, required_mismatch: int,
+                               conflicts: set[str] | None = None) -> dict:
+    """Vote once per sample window, while treating story parts as non-opposing.
+
+    ``conflicts`` lists episodes whose reference is a near-duplicate of the
+    claimed one (one transcript filed under two numbers). Votes for them are
+    neither agreement nor disagreement — the transcript genuinely matches both
+    episodes — so they can neither confirm the filename nor propose a rename."""
     expected_story = set(_story(eps, expected[0])) if len(expected) == 1 and expected[0] in eps else set()
+    conflicts = set(conflicts or ()) - expected_story - set(expected)
     expected_votes: list[dict] = []
     target_votes: dict[str, list[dict]] = {}
     story_codes: set[str] = set()
+    conflict_codes: set[str] = set()
     language_counts: dict[str, int] = {}
     whole_by_code: dict[str, float] = {}
     texts: list[str] = []
@@ -368,6 +382,8 @@ def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: di
                 expected_votes.append(vote)
             elif code in expected_story:
                 story_codes.add(code)
+            elif code in conflicts:
+                conflict_codes.add(code)
             else:
                 target_votes.setdefault(code, []).append(vote)
 
@@ -394,12 +410,15 @@ def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: di
                               "score": round(score_of(expected_votes), 4), "evidence": "sample"})
     candidates.extend({"code": code, "votes": 0, "score": 0.0, "evidence": "story-part"}
                       for code in story_codes)
+    candidates.extend({"code": code, "votes": 0, "score": 0.0, "evidence": "shared-reference"}
+                      for code in sorted(conflict_codes))
 
     targets = sorted((target_result(code) for code in target_votes),
                      key=lambda item: (item["votes"], item["score"]), reverse=True)
     has_text = any(window.get("has_text") for window in windows)
     languages = sorted(language_counts, key=lambda code: -language_counts[code])
     all_windows_language = bool(languages) and sum(language_counts.values()) == len(windows)
+    shared = ", ".join(sorted(conflict_codes))
 
     if not has_text:
         return {"status": "NO_TEXT", "code": None, "note": "No sample window produced dialogue",
@@ -409,12 +428,23 @@ def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: di
                 "note": f"Audio appears to be {languages[0]}; English references cannot identify it",
                 "episode_like": False, "candidates": candidates, "whole": whole, "text": text}
     if not expected_votes and not target_votes:
+        if conflict_codes:
+            return {"status": "LOW_CONFIDENCE", "code": None,
+                    "note": f"Sample matches {shared}, whose reference is a near-duplicate of "
+                            f"{expected[0] if expected else 'the filename'}'s — one transcript "
+                            "cannot tell the two episodes apart",
+                    "episode_like": True, "candidates": candidates, "whole": whole, "text": text}
         return {"status": "NO_MATCH", "code": None,
                 "note": ("No sample window contained episode-like dialogue" if not episode_like else
                          "Sample windows agree on a story part, but not on one episode"),
                 "episode_like": episode_like or bool(story_codes), "candidates": candidates,
                 "whole": whole, "text": text}
     if expected_votes and not target_votes:
+        if conflict_codes:
+            return {"status": "LOW_CONFIDENCE", "code": None,
+                    "note": f"Sample matches a transcript {expected_votes[0].get('code')} shares "
+                            f"with {shared} — it cannot prove which of the two this file is",
+                    "episode_like": True, "candidates": candidates, "whole": whole, "text": text}
         top = max(expected_votes, key=lambda v: float(v.get("score") or 0))
         return {"status": "OK", "code": expected_votes[0].get("code"),
                 "score": float(top.get("score") or 0), "votes": len(expected_votes),
@@ -468,7 +498,8 @@ def _apply_sample_aggregate(f: dict, agg: dict, window_seconds: float) -> None:
 
 
 def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict], matcher: Matcher,
-                              eps: dict, refs: dict, settings: dict, ctx) -> None:
+                              eps: dict, refs: dict, settings: dict, ctx,
+                              lex: evidence.Lexicon | None = None) -> None:
     base_start = float(settings["decision_sample_start"])
     window = float(settings["decision_sample_seconds"])
     max_windows = max(1, int(settings["decision_sample_max_windows"]))
@@ -482,6 +513,8 @@ def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict],
         ctx.check_cancel()
         ctx.progress(n / max(1, len(todo)), f"Sample evidence: {Path(f['rel']).name}")
         expected = f.get("expected") or []
+        conflicts = (set(lex.conflicting(expected[0]))
+                     if lex is not None and len(expected) == 1 else set())
         video = videos_by_rel.get(f["rel"])
         if video is None:
             continue
@@ -500,7 +533,7 @@ def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict],
             f["sample_windows"] = [{k: w.get(k) for k in
                                     ("start", "end", "source", "words", "has_text", "language", "votes", "whole")}
                                    for w in windows]
-            agg = _aggregate_sample_evidence(expected, windows, eps, settings, required)
+            agg = _aggregate_sample_evidence(expected, windows, eps, settings, required, conflicts)
             if agg["status"] in ("OK", "MISMATCH"):
                 break
             if agg.get("language") and len(windows) >= min(2, max_windows):
@@ -511,7 +544,7 @@ def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict],
         f["sample_start"] = min(float(w.get("start") or initial_start) for w in windows)
         f["sample_end"] = max(float(w.get("end") or initial_start + window) for w in windows)
         f["sample_window_seconds"] = window
-        agg = _aggregate_sample_evidence(expected, windows, eps, settings, required)
+        agg = _aggregate_sample_evidence(expected, windows, eps, settings, required, conflicts)
         _apply_sample_aggregate(f, agg, window)
         ctx.log(f"  {f['status']:<16} {Path(f['rel']).name}: {f['note']}")
 
@@ -596,6 +629,19 @@ def job_scan(ctx, params):
     matcher = Matcher(refs, s, background) if refs else None
     if matcher and len(refs) < 5:
         ctx.log(f"Only {len(refs)} reference(s): a dialogue match only counts when it's plainly that episode.")
+    lex = None
+    if refs and (fast or decision.available()):
+        try:
+            lex = evidence.Lexicon(eps, refs, story=lambda code: _story(eps, code),
+                                   conflict_similarity=float(s["decision_conflict_similarity"]))
+        except Exception as e:  # noqa: BLE001 — the scan works without it, just less precisely
+            ctx.log(f"Reference check: couldn't compare references ({e}); continuing without it.")
+    if lex and lex.conflict_pairs():
+        pairs = lex.conflict_pairs()
+        ctx.log(f"Reference check: {len(pairs)} pair(s) share one transcript, so they can neither "
+                "confirm nor deny a filename — " +
+                ", ".join(f"{'/'.join(p['codes'])} ({p['similarity']:.2f})" for p in pairs[:6]) +
+                ("…" if len(pairs) > 6 else "") + ". 'Fetch references' looks for replacements.")
     files = []
     for i, (v, rel, dlg, err) in enumerate(read):
         ctx.check_cancel()
@@ -644,7 +690,7 @@ def job_scan(ctx, params):
 
     videos_by_rel = {rel: v for v, rel, *_ in read}
     if fast and s.get("decision_sample_expand") and matcher:
-        _sample_confirmation_pass(videos_by_rel, files, matcher, eps, refs, s, ctx)
+        _sample_confirmation_pass(videos_by_rel, files, matcher, eps, refs, s, ctx, lex)
 
     scanned = [f for f in files if f.get("scope") != "sample"]
     if scanned:
@@ -660,7 +706,7 @@ def job_scan(ctx, params):
         _llm_pass(series, scanned, eps, refs, ctx)
 
     if decision.available() and any(f.get("scope") == "sample" for f in files):
-        _decision_pass(series, files, eps, ctx)
+        _decision_pass(series, files, eps, ctx, lex)
 
     if params.get("only"):
         # Only some files were scanned: the rest keep what the last scan found (if they're
@@ -1441,7 +1487,7 @@ def _vision_check(video: Path, f: dict, cards: list[dict], index, series_name: s
     return sorted([card] + keep, key=lambda c: c["time"])
 
 
-def _decision_pass(series, files, eps, ctx):
+def _decision_pass(series, files, eps, ctx, lex=None):
     """Ask Laya only about sample-scoped files. Its choice stays provisional."""
     todo = [f for f in files if f.get("scope") == "sample"
             and f.get("status") not in ("OK", "MISMATCH") and not f.get("language")]
@@ -1452,7 +1498,7 @@ def _decision_pass(series, files, eps, ctx):
     for n, f in enumerate(todo):
         ctx.check_cancel()
         ctx.progress(n / len(todo), f"Decision: {Path(f['rel']).name}")
-        adjudication.adjudicate(series, f, eps, ctx)
+        adjudication.adjudicate(series, f, eps, ctx, lexicon=lex)
 
 
 def _llm_pass(series, files, eps, refs, ctx):

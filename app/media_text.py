@@ -61,6 +61,14 @@ _LANG_STOPWORDS = {
     "pt": {"o", "a", "os", "as", "de", "do", "da", "que", "e", "é", "em", "um",
            "uma", "não", "nao", "com", "para", "por", "como", "mais", "isso",
            "este", "esta", "meu", "minha", "você", "voce", "nos"},
+    # Bazarr hands Indonesian subtitles out under .en.srt names often enough to
+    # count as a property of the library, not an accident — detect_language must
+    # recognize them or they poison an English reference comparison.
+    "id": {"yang", "dan", "apa", "itu", "ini", "dengan", "untuk", "dari", "pada", "adalah",
+           "bukan", "tidak", "saya", "anda", "kamu", "kami", "kita", "mereka", "dia", "nya",
+           "aku", "atau", "juga", "sudah", "akan", "saja", "bagaimana", "kapan", "siapa",
+           "mengapa", "bisa", "harus", "sangat", "seperti", "masih", "ada", "lagi", "hai",
+           "kabarmu", "pakai", "pukul", "sedang", "kalau", "televisi", "sedikit", "memberi"},
 }
 _LANG_PREFIXES = {"spa": "es", "english": "en", "eng": "en", "fre": "fr", "fra": "fr",
                   "ger": "de", "deu": "de", "ita": "it", "por": "pt"}

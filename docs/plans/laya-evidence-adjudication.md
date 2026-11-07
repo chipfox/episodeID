@@ -451,3 +451,49 @@ For every unit, perform spec review before code-quality review. Do not paralleli
 - When ASR is unavailable, validated embedded/diagnostic sidecar evidence still permits provisional identification instead of forcing `NO_TEXT`.
 - A true candidate outside the bounded Laya pool, or an `unknown` result, escalates to review rather than forcing a choice.
 - The live evaluation records accuracy and latency before any confidence threshold is treated as production-safe.
+
+## Implemented 2026-11-07: evidence selection and reference-conflict repair
+
+`app/evidence.py` (new) builds one `Lexicon` per series scan:
+
+- **Distinctive descriptor** per episode — TVDB title plus the one overview sentence with the
+  highest IDF mass. `decision._description()` uses it (fallback: clipped overview), so each
+  candidate gets a specific one-line identity such as `S04E14 Memento Mori — Scully is diagnosed
+  with terminal brain cancer: statistically zero chance.`
+- **Candidate term sets** — sublinear TF-IDF over the episode's reference transcript plus a
+  boosted title/overview; English stopwords are excluded so shared show vocabulary carries no
+  signal.
+- **Query-focused sentence retrieval** — `select_evidence()` scores each sample sentence by the
+  weight of its best candidate, keeps up to two for the expected episode, one per challenger, and
+  tops up to four, inside the request character budget. Every excerpt keeps its window tag
+  (`[20–30 min] …`) so provenance survives; small talk that no episode makes distinctive is
+  dropped.
+- **Reference-conflict registry** — pairs of long reference transcripts whose TF-IDF cosine is at
+  least `DECISION_CONFLICT_SIMILARITY` (default 0.85) share one transcript and cannot serve as
+  opposing evidence. Story parts are exempt because they legitimately share scenes.
+
+`app/adjudication.py`:
+
+- The filename's claim is guaranteed a candidate slot whenever it has references (it was
+  previously dropped by the pool cap — the root cause of the S09E01 packet failure).
+- A claim whose reference is a near-duplicate of another episode's is not asked about at all;
+  the file records `reference_conflict` and stays review.
+- Near-duplicate rivals are blocked from the pool, the instructions name the claimed episode and
+  the evidence windows, and the evidence packet replaces the head/tail truncation when a lexicon
+  exists.
+
+`app/pipeline.py` aggregates sample windows with the conflict registry: a window match that also
+lands on the claim's twin produces `LOW_CONFIDENCE` with a shared-transcript note instead of a
+false `NO_MATCH` or `MISMATCH`; the twins join `candidates` so the planner offers both as review
+options. `job_fetch_refs` calls `references.repair_reference_conflicts` when
+`REFERENCE_REPAIR` (default on) is enabled and an OpenSubtitles key is configured.
+
+`references.repair_reference_conflicts()`: for each conflicting pair it looks up both episodes on
+OpenSubtitles, downloads each episode's own subtitle when it exists, verifies the language tag
+and transcript size, and swaps the reference only when the two results stay clearly distinct
+(similarity below the conflict threshold). Replacements are stored in `repairs.json` beside the
+reference cache and replayed by `load_refs` with a `manual`-style `stored` marker, so the repair
+survives cache reloads. Episodes with no usable subtitle are reported, never guessed for.
+
+`media_text.py` adds Indonesian stopwords and broadens Portuguese so the `.en.srt` files that are
+actually Indonesian are detected by content, not filename.
