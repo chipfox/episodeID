@@ -337,8 +337,11 @@ def _segment_choice(seg: dict) -> tuple[str | None, str, bool]:
     """
     if seg.get("override"):
         return seg["override"], "manual", False
-    if seg.get("scope") == "sample" or seg.get("confidence") == "provisional":
+    if seg.get("confidence") == "provisional":
         return seg.get("code"), "provisional", False
+    if seg.get("scope") == "sample":
+        strength = "high" if seg.get("confidence") == "high" else "provisional"
+        return seg.get("code"), strength, False
     if seg.get("confidence") == "high":
         return seg["code"], "high", False
     if seg.get("llm"):
@@ -593,23 +596,26 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         rel = f["rel"]
         src = root / rel
         chosen = decided[rel]
-        base = {"source": rel, "status": f["status"], "note": f.get("note", ""),
-                "text_source": f.get("text_source"), "expected": f.get("expected") or [],
-                "segments": f.get("segments") or [], "selected": False,
-                "scope": f.get("scope") or "full"}
-
         sample_only = (f.get("scope") == "sample" or
                        any(sg.get("scope") == "sample" for sg in f.get("segments") or []))
         manually_set = any(sg.get("override") for sg in f.get("segments") or [])
+        base = {"source": rel, "status": f["status"], "note": f.get("note", ""),
+                "text_source": f.get("text_source"), "expected": f.get("expected") or [],
+                "segments": f.get("segments") or [], "selected": False,
+                "scope": "sample" if sample_only else (f.get("scope") or "full"),
+                "sample": sample_only}
+
         if sample_only and not manually_set:
-            suggested = [c[1] for c in chosen if c[1]] or list(f.get("expected") or [])
-            end = f.get("sample_end")
-            where = f"first {float(end) / 60:.0f} min" if end else "a sample"
-            items.append({**base, "kind": "review", "sample": True,
-                          "reason": f"Sample only ({where}) — {', '.join(suggested) or 'no candidate'} "
-                                    "is a suggestion, not proof of the whole file. Check it before renaming.",
-                          "suggested": suggested})
-            continue
+            high = bool(chosen) and all(c[2] == "high" for c in chosen)
+            if len(chosen) != 1 or not high:
+                suggested = [c[1] for c in chosen if c[1]] or list(f.get("expected") or [])
+                end = f.get("sample_end")
+                where = f"first {float(end) / 60:.0f} min" if end else "a sample"
+                items.append({**base, "kind": "review", "sample": True,
+                              "reason": f"Sample only ({where}) — {', '.join(suggested) or 'no candidate'} "
+                                        "is a suggestion, not proof of the whole file. Check it before renaming.",
+                              "suggested": suggested})
+                continue
 
         usable = [c for c in chosen if c[2] not in ("low", "provisional")]
         if f["status"] in ("NO_TEXT",) or not usable or len(usable) != len(chosen) \
@@ -696,11 +702,13 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 items.append({**base, "kind": "ok", "reason": "Correct"})
                 continue
             items.append({**base, "kind": "rename",
-                          "reason": ("AI suggestion — check before applying" if ai else
+                          "reason": ((f.get("note") or "Sample suggestion — check before applying")
+                                     if sample_only and not ai else
+                                     "AI suggestion — check before applying" if ai else
                                      f.get("note") or "Name does not match content"),
                           "ai": ai, "codes": codes,
                           "targets": [{"path": dst_rel, "codes": codes}],
-                          "selected": not ai})
+                          "selected": not ai and (not sample_only or manually_set)})
             moving.add(rel)
             for cd in codes:
                 claimed_targets[cd] = rel

@@ -328,15 +328,19 @@ def job_scan(ctx, params):
         res["segments"] = _story_parts(res["segments"], expected, eps, dlg["duration"])
         sampled = dlg.get("scope") == "sample"
         if sampled:
-            # A sample can suggest, but it cannot certify a whole file. This is
-            # what keeps the planner from pre-ticking a rename.
+            # Keep the matcher's real high/low result. A high sample match can
+            # certify a single episode; a high mismatch is still only an
+            # untracked suggestion. Weak samples go to review below.
             for sg in res["segments"]:
                 sg["scope"] = "sample"
-                sg["confidence"] = "provisional"
         status, note = classify(expected, res["segments"], dlg["source"])
         if sampled:
-            status = "LOW_CONFIDENCE"
-            note = (f"Sample of {dlg['duration'] / 60:.0f} min only — suggestion needs review")
+            if status == "OK":
+                note = f"Sample of {dlg['duration'] / 60:.0f} min — matches the filename"
+            elif status == "MISMATCH":
+                note = f"Sample of {dlg['duration'] / 60:.0f} min — suggested match needs review"
+            else:
+                note = f"Sample of {dlg['duration'] / 60:.0f} min — weak sample evidence"
         files.append({"rel": rel, "size": v.stat().st_size, "duration": dlg["duration"],
                       "text_source": dlg["source"], "expected": expected,
                       "scope": dlg.get("scope") or "full",
@@ -1150,7 +1154,8 @@ def _vision_check(video: Path, f: dict, cards: list[dict], index, series_name: s
 
 def _decision_pass(series, files, eps, ctx):
     """Ask Laya only about sample-scoped files. Its choice stays provisional."""
-    todo = [f for f in files if f.get("scope") == "sample"]
+    todo = [f for f in files if f.get("scope") == "sample"
+            and f.get("status") not in ("OK", "MISMATCH")]
     if not todo:
         return
     ctx.log(f"Decision model: asking {get_settings()['decision_model']} about {len(todo)} "

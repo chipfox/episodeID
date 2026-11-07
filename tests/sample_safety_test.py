@@ -1,8 +1,8 @@
-"""A sampled file may suggest an episode, but must never license a rename.
+"""A sampled file may certify a clear match, but a mismatch is only a suggestion.
 
-These cases reproduce the pre-implementation defect: the planner treated
-confidence=high as trusted and pre-ticked rename items. Sample evidence now
-carries scope=sample / confidence=provisional and must stop at review.
+These cases pin the boundary: a high-confidence sample that agrees with the
+filename is OK; a high-confidence sample on a misnamed file is an unticked
+rename; weak or multi-episode sample evidence stops at review.
 """
 import os
 import shutil
@@ -54,27 +54,36 @@ assert item["selected"] is False, item
 assert item["suggested"] == ["S01E02"], item
 assert item["sample"] is True, item
 
-# 2. Even a high local score cannot escape the sample gate.
-by = build({"rel": FILES["wrong"], "expected": ["S01E01"], "status": "OK",
+# 2. A high-confidence sample on a misnamed file is a suggested rename, not a
+#    pre-ticked action. The sample can identify it, but the human still checks it.
+by = build({"rel": FILES["wrong"], "expected": ["S01E01"], "status": "MISMATCH",
             "duration": 600, "sample_end": 600,
             "segments": [sample_segment("S01E02", confidence="high")]})
 item = by[FILES["wrong"]]
-print("sample high: ", item["kind"], item["selected"], item["suggested"])
-assert item["kind"] == "review" and item["selected"] is False, item
+print("sample high mismatch:", item["kind"], item["selected"], item.get("codes"))
+assert item["kind"] == "rename" and item["selected"] is False, item
+assert item["codes"] == ["S01E02"], item
+assert item.get("sample") is True, item
 
-# 3. A multi-episode filename with only sampled evidence is review, not a split
+# 3. A high-confidence sample that agrees with the filename is OK.
+by = build({"rel": FILES["wrong"], "expected": ["S01E01"], "status": "OK",
+            "duration": 600, "sample_end": 600,
+            "segments": [sample_segment("S01E01", confidence="high")]})
+item = by[FILES["wrong"]]
+print("sample high match:   ", item["kind"], item["selected"])
+assert item["kind"] == "ok" and item["selected"] is False, item
+
+# 4. A multi-episode filename with only sampled evidence is review, not a split
 #    or a rename that drops one of its episodes.
 by = build({"rel": FILES["multi"], "expected": ["S01E01", "S01E02"],
             "status": "LOW_CONFIDENCE", "duration": 600, "sample_end": 600,
             "segments": [sample_segment("S01E01")]})
 item = by[FILES["multi"]]
-print("sample multi: ", item["kind"], item["selected"], item["suggested"])
+print("sample multi:        ", item["kind"], item["selected"], item["suggested"])
 assert item["kind"] == "review" and item["selected"] is False, item
 assert item["suggested"] == ["S01E01"], item
 
-# 4. A sample must not be upgraded by the process-of-elimination pass. This is
-#    the live-stack failure: every other episode in the season was confirmed, so
-#    the planner turned the sample review into "ok".
+# 5. A sample must not be upgraded by the process-of-elimination pass.
 elim = []
 for n in range(1, 5):
     rel = f"Season 01/Sample Show - S01E{n:02d} - Episode {n}.mkv"
@@ -115,9 +124,10 @@ print("full-file high:", item["kind"], item["selected"], item.get("codes"))
 assert item["kind"] == "rename" and item["selected"] is True, item
 assert item["codes"] == ["S01E02"], item
 
-# 6. The strength mapping makes the invariant explicit.
+# 6. The strength mapping makes the boundary explicit: sample high stays high,
+#    while provisional/low sample evidence stays untrusted.
 assert planner._segment_choice({"code": "S01E02", "confidence": "high",
-                                "scope": "sample"}) == ("S01E02", "provisional", False)
+                                "scope": "sample"}) == ("S01E02", "high", False)
 assert planner._segment_choice({"code": "S01E02", "confidence": "provisional"}) == \
     ("S01E02", "provisional", False)
 print("PASS")

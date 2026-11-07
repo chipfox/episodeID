@@ -104,10 +104,10 @@ Laya is not called for ordinary high-confidence deterministic files. It is calle
 
 These are gates, not preferences. The existing full-file matcher is the only component that may produce trusted evidence for a rename, split, join, duplicate removal, or “correct” result.
 
-1. **Sample evidence is never trusted.** A segment derived from the first N-minute sample must carry `scope: "sample"` / `confidence: "provisional"`, never `confidence: "high"`. `build_plan()` must treat provisional/sample evidence as an unticked suggestion, even when the deterministic score is high.
+1. **Sample evidence may certify only a clear single-episode match.** A sampled segment keeps the matcher’s real `high`/`low` confidence. A `high` sample that agrees with the filename may produce `ok`; a `high` sample mismatch is an unticked rename suggestion; weak or multi-episode sample evidence stays `review`. Sample evidence must never authorize a split, join, duplicate removal, or other multi-file action.
 2. **The sample cannot claim the whole file.** The sampler returns its actual `sample_start` and `sample_end`; every sample segment is clipped to that window. `Matcher.match_file()` must receive the sample duration, not the full file duration. A segment must never inherit `end = file.duration` merely because the file is longer than the sample.
 3. **Multi-episode files require the full timeline.** The fast path must not produce `ok`, `rename`, `split`, `join`, or `aside` for a file whose filename claims multiple episodes, whose duration is materially longer than the TVDB runtime, or whose episode count cannot be established from the sample. Escalate to full-file matching.
-4. **One episode in the filename is not proof of one episode in the file.** For a sample-only result, do not mark the file `OK` when the duration is inconsistent with a single episode. Sample-only results are always provisional suggestions until the full-file path or the user confirms them.
+4. **One episode in the filename is not proof of one episode in the file.** A sample-only `ok` is allowed only when the matcher is `high`, the filename claims exactly one episode, and the duration is consistent with a single episode. Any multi-episode or runtime mismatch escalates to the full-file path.
 5. **Candidate cap must not hide the true answer.** Rank the complete reference index locally and union the filename/Sonarr claims before truncating. If the best supported candidate is outside the Laya pool, or no candidate clears the deterministic support floor, return review/`unknown`; never force Laya to choose among four weak candidates.
 6. **Missing ASR is not `NO_TEXT`.** If remote or local ASR is unavailable and a validated embedded track or a diagnostic sidecar exists, the app must still identify what it can, marked provisional/untrusted. It must not discard usable evidence merely because the preferred ASR backend is down.
 7. **Full-file behavior stays authoritative.** Existing `matcher.match_file()`, Viterbi segmentation, title-card arbitration, reference swaps, duplicate claims, `allow_splits`, Plan → Apply → Undo, and manual overrides must continue to pass their current tests. The fast path is additive; it must not replace those paths for ambiguous or multi-episode files.
@@ -118,6 +118,7 @@ Required regression tests before enabling the fast path:
 ```text
 tests/sample_safety_test.py
   - high-scoring sample on a misnamed single episode → rename exists but selected=False
+  - high-scoring sample that agrees with the filename → ok
   - sample segment end never exceeds sample_end, even when file duration is longer
   - filename S01E01-E02 with a first-10-minute match → review, not a rename that drops E02
   - filename S01E01 but runtime is roughly two episode runtimes → deep path, not OK
@@ -187,14 +188,14 @@ Every plan segment must also carry its evidence scope. Sample segments use this 
   "end": 600,
   "code": "S03E11",
   "score": 0.42,
-  "confidence": "provisional",
+  "confidence": "high",
   "scope": "sample",
   "evidence": "first-10-minute ASR",
   "llm": {"code": "S03E11", "confidence": 0.73}
 }
 ```
 
-`confidence: "provisional"` is mapped to an untrusted suggestion in `planner._segment_choice()`, not to `high`. A full-file segment may use the existing trusted values (`high`, `manual`, `low`, `conflict`, `none`).
+`confidence: "high"` is allowed only when the sample matcher itself reached `high`; it may produce `ok` when the filename agrees, and a mismatch is an unticked rename suggestion. `confidence: "provisional"` is mapped to an untrusted review in `planner._segment_choice()`. A full-file segment may use the existing trusted values (`high`, `manual`, `low`, `conflict`, `none`).
 
 ---
 
