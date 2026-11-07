@@ -7,13 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import autocheck
-from . import db, fandom, llm, titlecard, tvdb
+from . import adjudication, db, decision, fandom, llm, titlecard, tvdb
 from .config import get_settings
 from .executor import (apply_plan, migrate_legacy_backup, sonarr_rescan, sonarr_series_type_note,
                        undo_apply)
 from .jobs import Cancelled, handler
 from .matcher import Matcher, classify, parse_filename_episodes
-from .media_text import cached_dialogue, get_dialogue
+from .media_text import cached_dialogue, duration, get_dialogue, probe, sample_dialogue
 from .planner import build_plan, list_videos
 from .references import (SAME_EPISODE_SCORE, detect_fandom_wiki, ep_code, load_refs, norm_title,
                          refresh_references, renumber_references,
@@ -199,6 +199,38 @@ def _aired(e: dict) -> bool:
     return not e.get("aired") or e["aired"] <= datetime.now(timezone.utc).date().isoformat()
 
 
+def _sample_eligible(video: Path, expected: list[str], eps: dict,
+                     runtime_minutes: float | None, settings: dict) -> bool:
+    """Only single-episode files of normal runtime get the sample path.
+
+    A file named for several episodes, or about twice one episode's runtime,
+    is exactly where a 10-minute sample is least trustworthy: it must use the
+    full matcher so splits and joins can be found.
+    """
+    if len(expected) != 1 or expected[0] not in eps:
+        return False
+    try:
+        dur = duration(probe(video))
+    except Exception:  # noqa: BLE001
+        return False
+    if dur <= 0:
+        return False
+    if dur <= float(settings["decision_sample_seconds"]) * 0.8:
+        return False  # the file is short enough to read whole
+    runtime = float(eps[expected[0]].get("runtime") or runtime_minutes or 0)
+    if runtime and dur > runtime * 60 * 1.55:
+        return False  # likely a multi-episode file; let the full matcher split it
+    if not runtime and dur > 90 * 60:
+        return False  # unknown runtime and unusually long: don't sample
+    return True
+
+
+def _runtime_minutes(eps: dict) -> float | None:
+    values = sorted(float(e["runtime"]) for e in eps.values()
+                    if e.get("runtime") and e["season"] > 0)
+    return values[len(values) // 2] if values else None
+
+
 @handler("scan")
 def job_scan(ctx, params):
     s = get_settings()
@@ -236,14 +268,33 @@ def job_scan(ctx, params):
         only = set(params["only"])
         videos = [v for v in videos if str(v.relative_to(root)) in only]
     ctx.log(f"Scanning {len(videos)} video files in {root}")
+    fast = bool(s["decision_fast_path"])
+    runtime_min = _runtime_minutes(eps)
+    if fast:
+        ctx.log(f"Fast path: sampling the first {int(s['decision_sample_seconds']) // 60} min "
+                "of single-episode files; multi-episode and long files use the full matcher.")
     # 1. Read every file's dialogue (cached unless new or replaced).
     read = []
     for i, v in enumerate(videos):
         ctx.check_cancel()
         rel = str(v.relative_to(root))
         ctx.progress(i / max(1, len(videos)) * 0.9, f"Reading {v.name}")
+        expected = parse_filename_episodes(v.name)
         try:
-            read.append((v, rel, get_dialogue(v, ctx, allow_whisper=params.get("whisper", True)), None))
+            dlg = None
+            if fast and _sample_eligible(v, expected, eps, runtime_min, s):
+                dlg = sample_dialogue(v, ctx, allow_whisper=params.get("whisper", True),
+                                      start=s["decision_sample_start"],
+                                      duration=s["decision_sample_seconds"])
+                if dlg.get("scope") == "sample" and dlg.get("cues"):
+                    ctx.log(f"  sampled {rel.rsplit('/', 1)[-1]}: {dlg['source']} "
+                            f"({dlg['duration'] / 60:.1f} min)")
+                elif not dlg.get("cues"):
+                    ctx.log(f"  sample found no text in {rel}; reading the whole file")
+                    dlg = None
+            if dlg is None:
+                dlg = get_dialogue(v, ctx, allow_whisper=params.get("whisper", True))
+            read.append((v, rel, dlg, None))
         except Exception as e:  # noqa: BLE001
             read.append((v, rel, None, e))
     # 2. Match. Word weights come from the references and every file's dialogue.
@@ -275,9 +326,24 @@ def job_scan(ctx, params):
             else {"segments": [], "whole": []}
         _discount_unreferenced(res["segments"], expected, dlg["duration"], refs)
         res["segments"] = _story_parts(res["segments"], expected, eps, dlg["duration"])
+        sampled = dlg.get("scope") == "sample"
+        if sampled:
+            # A sample can suggest, but it cannot certify a whole file. This is
+            # what keeps the planner from pre-ticking a rename.
+            for sg in res["segments"]:
+                sg["scope"] = "sample"
+                sg["confidence"] = "provisional"
         status, note = classify(expected, res["segments"], dlg["source"])
+        if sampled:
+            status = "LOW_CONFIDENCE"
+            note = (f"Sample of {dlg['duration'] / 60:.0f} min only — suggestion needs review")
         files.append({"rel": rel, "size": v.stat().st_size, "duration": dlg["duration"],
                       "text_source": dlg["source"], "expected": expected,
+                      "scope": dlg.get("scope") or "full",
+                      "sample_start": dlg.get("sample_start"),
+                      "sample_end": dlg.get("sample_end"),
+                      "file_duration": dlg.get("file_duration"),
+                      "sample_text": adjudication.dialogue_text(dlg["cues"]) if sampled else "",
                       "segments": res["segments"], "whole": res["whole"],
                       "status": status, "note": note})
         det = " + ".join(f"{sg['code']}{'' if sg['confidence'] == 'high' else '?'}"
@@ -287,16 +353,21 @@ def job_scan(ctx, params):
             if sg.get("why"):
                 ctx.log(f"{'':<16}   {sg['code']}? {sg['why']}")
 
-    _release_name_pass(series, files, ctx)
-    _titlecard_pass(series, files, eps, ctx, reread=bool(params.get("reread_cards")))
-    _title_card_swaps(files, ctx)
-    for sw in reference_swaps(files, refs):
-        ctx.log(f"References for {sw['codes'][0]} and {sw['codes'][1]} look swapped: title cards confirm each "
-                f"file's name, but each file's dialogue matched the other's reference ({sw['files'][0]}, "
-                f"{sw['files'][1]}). Swap them under Episodes & references.")
+    scanned = [f for f in files if f.get("scope") != "sample"]
+    if scanned:
+        _release_name_pass(series, scanned, ctx)
+        _titlecard_pass(series, scanned, eps, ctx, reread=bool(params.get("reread_cards")))
+        _title_card_swaps(scanned, ctx)
+        for sw in reference_swaps(scanned, refs):
+            ctx.log(f"References for {sw['codes'][0]} and {sw['codes'][1]} look swapped: title cards confirm each "
+                    f"file's name, but each file's dialogue matched the other's reference ({sw['files'][0]}, "
+                    f"{sw['files'][1]}). Swap them under Episodes & references.")
 
-    if llm.available():
-        _llm_pass(series, files, eps, refs, ctx)
+    if llm.available() and scanned:
+        _llm_pass(series, scanned, eps, refs, ctx)
+
+    if decision.available() and any(f.get("scope") == "sample" for f in files):
+        _decision_pass(series, files, eps, ctx)
 
     if params.get("only"):
         # Only some files were scanned: the rest keep what the last scan found (if they're
@@ -1075,6 +1146,19 @@ def _vision_check(video: Path, f: dict, cards: list[dict], index, series_name: s
     card = {**r, "text": f"{text} (vision)", "time": frames[0][0], "frames": 1, "vision": True}
     keep = [c for c in cards if c["time"] >= full_len]  # later episodes' cards in the file
     return sorted([card] + keep, key=lambda c: c["time"])
+
+
+def _decision_pass(series, files, eps, ctx):
+    """Ask Laya only about sample-scoped files. Its choice stays provisional."""
+    todo = [f for f in files if f.get("scope") == "sample"]
+    if not todo:
+        return
+    ctx.log(f"Decision model: asking {get_settings()['decision_model']} about {len(todo)} "
+            "sampled file(s) the matcher could not settle")
+    for n, f in enumerate(todo):
+        ctx.check_cancel()
+        ctx.progress(n / len(todo), f"Decision: {Path(f['rel']).name}")
+        adjudication.adjudicate(series, f, eps, ctx)
 
 
 def _llm_pass(series, files, eps, refs, ctx):

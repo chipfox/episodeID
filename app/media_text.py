@@ -130,19 +130,22 @@ def duration(info: dict) -> float:
         return 0.0
 
 
-def _lang_ok(stream: dict, lang: str) -> bool:
+def _lang_ok(stream: dict, lang: str, allow_untagged: bool = True) -> bool:
     tag = ((stream.get("tags") or {}).get("language") or "").lower()
     if not lang:
         return True
     aliases = {"en": {"en", "eng", "english"}, "es": {"es", "spa"}, "fr": {"fr", "fre", "fra"},
                "de": {"de", "ger", "deu"}, "it": {"it", "ita"}, "pt": {"pt", "por"},
                "nl": {"nl", "dut", "nld"}, "ja": {"ja", "jpn"}}
-    return tag in aliases.get(lang, {lang}) or tag in ("", "und")
+    if tag in ("", "und"):
+        return allow_untagged
+    return tag in aliases.get(lang, {lang})
 
 
 # ---------------------------------------------------------------- extract
 
-def _cache_key(path: Path) -> str:
+def _cache_key(path: Path, scope: str = "full", start: float = 0.0,
+               duration: float | None = None) -> str:
     st = path.stat()
     # No path in the key: renames keep size+mtime, so Whisper transcripts survive an apply.
     key = f"{st.st_size}|{st.st_mtime_ns}"
@@ -161,6 +164,8 @@ def _cache_key(path: Path) -> str:
     key += (f"|sidecars:{int(bool(s['sidecar_subtitles']))}|transcriber:{backend}"
             f"|local-model:{s['whisper_model']}|remote-model:{s['whisper_remote_model']}"
             f"|language:{s['whisper_language']}|remote-url:{s['whisper_base_url']}")
+    if scope != "full":
+        key += f"|scope:{scope}|start:{float(start):.3f}|duration:{float(duration or 0):.3f}"
     return hashlib.sha1(key.encode()).hexdigest()
 
 
@@ -168,8 +173,9 @@ def glob_escape(s: str) -> str:
     return re.sub(r"([\[\]*?])", r"[\1]", s)
 
 
-def _cache_file(path: Path) -> Path:
-    return CACHE_DIR / "text" / f"{_cache_key(path)}.json"
+def _cache_file(path: Path, scope: str = "full", start: float = 0.0,
+                duration: float | None = None) -> Path:
+    return CACHE_DIR / "text" / f"{_cache_key(path, scope, start, duration)}.json"
 
 
 def sidecar_subtitle(video: Path, lang: str) -> Path | None:
@@ -190,7 +196,8 @@ def sidecar_subtitle(video: Path, lang: str) -> Path | None:
     return max(candidates, key=lambda c: c[0])[1] if candidates else None
 
 
-def extract_embedded(video: Path, info: dict, lang: str) -> tuple[list[Cue], str] | None:
+def extract_embedded(video: Path, info: dict, lang: str,
+                     allow_untagged: bool = True) -> tuple[list[Cue], str] | None:
     subs = [s for s in info.get("streams", []) if s.get("codec_type") == "subtitle"]
     text_subs = [s for s in subs if s.get("codec_name") in TEXT_SUB_CODECS]
     if not text_subs:
@@ -199,11 +206,12 @@ def extract_embedded(video: Path, info: dict, lang: str) -> tuple[list[Cue], str
     def rank(s):
         disp = s.get("disposition") or {}
         title = ((s.get("tags") or {}).get("title") or "").lower()
-        return (_lang_ok(s, lang), not disp.get("forced") and "forced" not in title,
+        return (_lang_ok(s, lang, allow_untagged),
+                not disp.get("forced") and "forced" not in title,
                 "sdh" not in title, -s["index"])
 
     best = max(text_subs, key=rank)
-    if not _lang_ok(best, lang):
+    if not _lang_ok(best, lang, allow_untagged):
         return None
     r = subprocess.run(
         ["ffmpeg", "-v", "error", "-nostdin", "-i", str(video), "-map", f"0:{best['index']}",
@@ -270,6 +278,92 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(data))
     return data
+
+
+def _clip_cues(cues: list[Cue], start: float, end: float) -> list[Cue]:
+    """Keep only the part of each cue inside [start, end], file-relative."""
+    out = []
+    for cue in cues:
+        a, b = max(cue.start, start), min(cue.end, end)
+        if b > a and cue.text.strip():
+            out.append(Cue(round(a, 3), round(b, 3), cue.text.strip()))
+    return out
+
+
+def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
+                    start: float | None = None,
+                    duration: float | None = None) -> dict:
+    """Read a bounded sample, preferring ASR, and mark it as provisional evidence.
+
+    The returned dict has the same shape as get_dialogue(), plus scope,
+    sample_start, sample_end and file_duration. A sample is not a full-file
+    transcript and must never be treated as trusted evidence by the planner.
+    """
+    s = get_settings()
+    start = max(0.0, float(s["decision_sample_start"] if start is None else start))
+    window = float(s["decision_sample_seconds"] if duration is None else duration)
+    cache = _cache_file(video, "sample", start, window)
+    cached = _read_cached(cache, s["sidecar_subtitles"])
+    if cached is not None and (cached["source"] != "none" or not allow_whisper
+                               or not s["whisper_enabled"]):
+        return cached
+
+    info = probe(video)
+    full = duration_of(info)
+    end = min(full, start + window) if full else start + window
+    sample_len = max(0.1, end - start)
+    partial = not full or full > end + 1.0
+    result = None
+    fallback = ""
+
+    if allow_whisper and s["whisper_enabled"]:
+        try:
+            from . import transcribe as tr
+            if ctx:
+                ctx.log(f"  sampling {start:.0f}–{end:.0f}s with {tr.source_label(s)}…")
+            cues = tr.transcribe(video, ctx, start=start, duration=sample_len)
+            if cues:
+                result = (cues, tr.source_label(s))
+        except Exception as e:  # noqa: BLE001
+            fallback = f"ASR failed: {e}"
+            if ctx:
+                ctx.log(f"  sample ASR failed ({e}); trying subtitle evidence")
+    if result is None:
+        # With no ASR, only explicitly tagged English subtitles are acceptable
+        # as a sample fallback. Untagged streams are often the wrong language.
+        result = extract_embedded(video, info, s["subtitle_language"], allow_untagged=False)
+        if result is None and s["sidecar_subtitles"]:
+            sc = sidecar_subtitle(video, s["subtitle_language"])
+            if sc:
+                cues = parse_subtitle_text(read_text_file(sc), sc.suffix.lower())
+                if cues:
+                    result = (cues, f"sidecar {sc.name}")
+        if result is not None:
+            fallback = fallback or "ASR unavailable; used subtitle evidence"
+
+    if result is None:
+        data = {"source": "none", "duration": sample_len, "cues": [],
+                "scope": "sample" if partial else "full",
+                "sample_start": start, "sample_end": end, "file_duration": full}
+        if fallback:
+            data["fallback"] = fallback
+    else:
+        cues, source = result
+        cues = _clip_cues(cues, start, end)
+        data = {"source": source, "duration": sample_len,
+                "cues": [[round(c.start, 2), round(c.end, 2), c.text] for c in cues],
+                "scope": "sample" if partial else "full",
+                "sample_start": start, "sample_end": end, "file_duration": full}
+        if fallback:
+            data["fallback"] = fallback
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(data))
+    return data
+
+
+def duration_of(info: dict) -> float:
+    """Alias kept local to sampling so existing callers keep using duration()."""
+    return duration(info)
 
 
 def has_image_subs(info: dict) -> bool:

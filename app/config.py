@@ -54,6 +54,18 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "titlecard_ocr_device": ("auto", "TITLECARD_OCR_DEVICE", False),   # auto | cpu
     "titlecard_hwaccel": ("auto", "TITLECARD_HWACCEL", False),         # auto | off | cuda | vaapi
     "llm_vision_model": ("", "LLM_VISION_MODEL", False),
+    # Fast typed-decision model (Laya in LM Studio). It only rank-breaks the
+    # matcher's candidates; it never becomes trusted evidence.
+    "decision_enabled": (False, "DECISION_ENABLED", False),
+    "decision_base_url": ("http://10.0.0.11:1234/v1", "DECISION_BASE_URL", False),
+    "decision_model": ("laya", "DECISION_MODEL", False),
+    "decision_timeout": (30, "DECISION_TIMEOUT", False),
+    "decision_max_candidates": (4, "DECISION_MAX_CANDIDATES", False),
+    "decision_max_input_chars": (1600, "DECISION_MAX_INPUT_CHARS", False),
+    "decision_sample_seconds": (600, "DECISION_SAMPLE_SECONDS", False),
+    "decision_sample_start": (0, "DECISION_SAMPLE_START", False),
+    "decision_fast_path": (False, "DECISION_FAST_PATH", False),
+    "decision_embeddings_enabled": (False, "DECISION_EMBEDDINGS_ENABLED", False),
     # Sonarr
     "sonarr_url": ("", "SONARR_URL", False),
     "sonarr_api_key": ("", "SONARR_API_KEY", True),

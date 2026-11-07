@@ -117,11 +117,17 @@ def _pick_audio_stream(video: Path, lang: str) -> str:
     return f"0:{max(streams, key=rank)['index']}"
 
 
-def decode_audio(video: Path, lang: str = "") -> np.ndarray:
-    """Whole audio track as 16 kHz mono float32 (≈85 MB for a 22-minute episode)."""
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", str(video),
-           "-map", _pick_audio_stream(video, lang), "-vn", "-sn", "-dn",
-           "-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "-acodec", "pcm_f32le", "-"]
+def decode_audio(video: Path, lang: str = "", start: float = 0.0,
+                 duration: float | None = None) -> np.ndarray:
+    """Audio as 16 kHz mono float32, optionally clipped to a sample window."""
+    cmd = ["ffmpeg", "-nostdin", "-v", "error"]
+    if start > 0:
+        cmd += ["-ss", f"{start:.3f}"]
+    cmd += ["-i", str(video),
+            "-map", _pick_audio_stream(video, lang), "-vn", "-sn", "-dn"]
+    if duration is not None and duration > 0:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-ac", "1", "-ar", str(SAMPLE_RATE), "-f", "f32le", "-acodec", "pcm_f32le", "-"]
     r = subprocess.run(cmd, capture_output=True, timeout=3600)
     if r.returncode != 0 or not r.stdout:
         raise RuntimeError(f"ffmpeg could not decode audio: "
@@ -136,12 +142,18 @@ def _remote_endpoint(settings: dict) -> str:
     return base if base.endswith("/audio/transcriptions") else f"{base}/audio/transcriptions"
 
 
-def _encode_remote_audio(video: Path, lang: str) -> bytes:
+def _encode_remote_audio(video: Path, lang: str, start: float = 0.0,
+                         duration: float | None = None) -> bytes:
     """Encode a broadly accepted, compact upload for OpenAI-compatible APIs."""
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-i", str(video),
-           "-map", _pick_audio_stream(video, lang), "-vn", "-sn", "-dn",
-           "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "libmp3lame",
-           "-b:a", "64k", "-f", "mp3", "-"]
+    cmd = ["ffmpeg", "-nostdin", "-v", "error"]
+    if start > 0:
+        cmd += ["-ss", f"{start:.3f}"]
+    cmd += ["-i", str(video),
+            "-map", _pick_audio_stream(video, lang), "-vn", "-sn", "-dn"]
+    if duration is not None and duration > 0:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "libmp3lame",
+            "-b:a", "64k", "-f", "mp3", "-"]
     r = subprocess.run(cmd, capture_output=True, timeout=3600)
     if r.returncode != 0 or not r.stdout:
         raise RuntimeError(f"ffmpeg could not encode audio for remote transcription: "
@@ -156,8 +168,9 @@ def _float(value, default: float = 0.0) -> float:
         return default
 
 
-def _remote_cues(payload, total: float) -> list[Cue]:
-    """Accept verbose_json segments, word timestamps, or a plain text response."""
+def _remote_cues(payload, total: float, offset: float = 0.0) -> list[Cue]:
+    """Accept verbose_json segments, word timestamps, or a plain text response.
+    Times are shifted by offset so cues stay relative to the whole file."""
     if isinstance(payload, list):
         payload = {"segments": payload}
     if not isinstance(payload, dict):
@@ -172,13 +185,13 @@ def _remote_cues(payload, total: float) -> list[Cue]:
             text = str(segment.get("text") or "").strip()
             if not text:
                 continue
-            start = max(0.0, _float(segment.get("start")))
-            end = _float(segment.get("end"))
+            start = max(0.0, _float(segment.get("start"))) + offset
+            end = _float(segment.get("end")) + offset
             if end <= start:
-                next_start = (_float(segments[i + 1].get("start"))
+                next_start = (_float(segments[i + 1].get("start")) + offset
                               if i + 1 < len(segments) and isinstance(segments[i + 1], dict)
-                              else 0.0)
-                end = next_start if next_start > start else max(total, start + 1.0)
+                              else offset)
+                end = next_start if next_start > start else max(total + offset, start + 1.0)
             cues.append(Cue(start, end, text))
         if cues:
             return cues
@@ -192,8 +205,8 @@ def _remote_cues(payload, total: float) -> list[Cue]:
         for word in words:
             if not isinstance(word, dict) or not str(word.get("word") or "").strip():
                 continue
-            start = max(0.0, _float(word.get("start"), current_end))
-            end = _float(word.get("end"), start + 0.5)
+            start = max(0.0, _float(word.get("start"), current_end - offset)) + offset
+            end = _float(word.get("end"), start + 0.5) + (offset if word.get("end") else 0.0)
             if not current:
                 current_start = start
             current.append(str(word.get("word")).strip())
@@ -210,20 +223,25 @@ def _remote_cues(payload, total: float) -> list[Cue]:
     if text:
         # Preserve usable text even when a minimal server does not return
         # timestamps. A timestamped response remains strongly preferred.
-        return [Cue(0.0, max(total, 1.0), text)]
+        return [Cue(offset, offset + max(total, 1.0), text)]
     raise RuntimeError("remote transcription returned no text or timestamped segments")
 
 
-def _remote_transcribe(video: Path, ctx=None) -> list[Cue]:
+def _remote_transcribe(video: Path, ctx=None, start: float = 0.0,
+                       duration: float | None = None) -> list[Cue]:
     s = get_settings()
     lang = s["whisper_language"] or ""
     model = _transcription_model(s)
     if ctx:
         ctx.status(f"Remote transcription: {video.name}")
-    audio = _encode_remote_audio(video, lang)
+    if start or duration is not None:
+        audio = _encode_remote_audio(video, lang, start, duration)
+    else:
+        audio = _encode_remote_audio(video, lang)
     if ctx:
         ctx.check_cancel()
-        ctx.log(f"  uploading {video.name} to the remote transcription service ({model})…")
+        where = f" {start:.0f}–{start + duration:.0f}s" if duration else ""
+        ctx.log(f"  uploading {video.name}{where} to the remote transcription service ({model})…")
     headers = {}
     if s["whisper_api_key"]:
         headers["Authorization"] = f"Bearer {s['whisper_api_key']}"
@@ -247,11 +265,15 @@ def _remote_transcribe(video: Path, ctx=None) -> list[Cue]:
     total = _float(payload.get("duration")) if isinstance(payload, dict) else 0.0
     if total <= 0:
         try:
-            from .media_text import duration
-            total = duration(probe(video))
+            from .media_text import duration as media_duration
+            total = media_duration(probe(video))
+            if start:
+                total = max(0.0, total - start)
+            if duration is not None:
+                total = min(total, duration)
         except Exception:  # noqa: BLE001
-            total = 0.0
-    cues = _remote_cues(payload, total)
+            total = duration or 0.0
+    cues = _remote_cues(payload, total, offset=start)
     if ctx:
         ctx.check_cancel()
         ctx.status(f"Remote transcription: {video.name} done")
@@ -290,17 +312,18 @@ def test_remote() -> str:
     return f"Remote transcription endpoint replied for '{model}'."
 
 
-def transcribe(video: Path, ctx=None) -> list[Cue]:
+def transcribe(video: Path, ctx=None, start: float = 0.0,
+               duration: float | None = None) -> list[Cue]:
     s = get_settings()
     global _gpu_error, _model
     if _backend(s) == "openai":
         with _lock:
-            return _remote_transcribe(video, ctx)
+            return _remote_transcribe(video, ctx, start, duration)
     lang = s["whisper_language"] or None
-    audio = decode_audio(video, lang or "")
+    audio = decode_audio(video, lang or "", start, duration)
     with _lock:
         try:
-            return _run(_load(), audio, lang, video, ctx)
+            return _run(_load(), audio, lang, video, ctx, offset=start)
         except Exception as e:  # noqa: BLE001
             if type(e).__name__ == "Cancelled" or not _model_key or _model_key[1] != "cuda":
                 raise
@@ -310,10 +333,10 @@ def transcribe(video: Path, ctx=None) -> list[Cue]:
             if ctx:
                 ctx.log(f"  Whisper on the GPU failed ({_gpu_error}); using the CPU instead "
                         "(with the 'small' model if a large one was selected).")
-            return _run(_load(), audio, lang, video, ctx)
+            return _run(_load(), audio, lang, video, ctx, offset=start)
 
 
-def _run(model, audio, lang, video: Path, ctx) -> list[Cue]:
+def _run(model, audio, lang, video: Path, ctx, offset: float = 0.0) -> list[Cue]:
     segments, info = model.transcribe(
         audio, language=lang, vad_filter=True,
         beam_size=1, condition_on_previous_text=False)
@@ -322,7 +345,7 @@ def _run(model, audio, lang, video: Path, ctx) -> list[Cue]:
     for seg in segments:
         text = seg.text.strip()
         if text:
-            cues.append(Cue(seg.start, seg.end, text))
+            cues.append(Cue(seg.start + offset, seg.end + offset, text))
         if ctx:
             ctx.check_cancel()
             ctx.status(f"Whisper: {video.name} {seg.end / total:.0%}")

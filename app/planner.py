@@ -330,9 +330,15 @@ def sidecars(video: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 def _segment_choice(seg: dict) -> tuple[str | None, str, bool]:
-    """(code, strength, ai). strength: 'high' | 'ai' | 'low'."""
+    """(code, strength, ai). strength: 'manual' | 'high' | 'ai' | 'provisional' | 'low'.
+
+    A sample-scoped segment is never trusted, even if its local score is high:
+    ten minutes cannot prove the whole file.
+    """
     if seg.get("override"):
         return seg["override"], "manual", False
+    if seg.get("scope") == "sample" or seg.get("confidence") == "provisional":
+        return seg.get("code"), "provisional", False
     if seg.get("confidence") == "high":
         return seg["code"], "high", False
     if seg.get("llm"):
@@ -557,11 +563,11 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         decided[f["rel"]] = chosen
 
     # 2. Claims: which (file, segment) owns each episode. Best evidence wins.
-    rank = {"manual": 3, "high": 2, "ai": 1, "low": 0}
+    rank = {"manual": 3, "high": 2, "ai": 1, "provisional": 0, "low": 0}
     claims: dict[str, list[tuple]] = {}
     for f in files:
         for seg, code, strength, ai in decided[f["rel"]]:
-            if strength == "low":
+            if strength in ("low", "provisional"):
                 continue
             # Prefer: stronger evidence, then the file already named for it, then score.
             named = code in (f.get("expected") or [])
@@ -587,9 +593,23 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         chosen = decided[rel]
         base = {"source": rel, "status": f["status"], "note": f.get("note", ""),
                 "text_source": f.get("text_source"), "expected": f.get("expected") or [],
-                "segments": f.get("segments") or [], "selected": False}
+                "segments": f.get("segments") or [], "selected": False,
+                "scope": f.get("scope") or "full"}
 
-        usable = [c for c in chosen if c[2] != "low"]
+        sample_only = (f.get("scope") == "sample" or
+                       any(sg.get("scope") == "sample" for sg in f.get("segments") or []))
+        manually_set = any(sg.get("override") for sg in f.get("segments") or [])
+        if sample_only and not manually_set:
+            suggested = [c[1] for c in chosen if c[1]] or list(f.get("expected") or [])
+            end = f.get("sample_end")
+            where = f"first {float(end) / 60:.0f} min" if end else "a sample"
+            items.append({**base, "kind": "review", "sample": True,
+                          "reason": f"Sample only ({where}) — {', '.join(suggested) or 'no candidate'} "
+                                    "is a suggestion, not proof of the whole file. Check it before renaming.",
+                          "suggested": suggested})
+            continue
+
+        usable = [c for c in chosen if c[2] not in ("low", "provisional")]
         if f["status"] in ("NO_TEXT",) or not usable or len(usable) != len(chosen) \
                 or (f.get("hold") and f["status"] != "MANUAL"):
             # Not enough evidence to act on every part of this file.

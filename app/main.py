@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import __version__, db, executor, jobs, llm, titlecard, tvdb
+from . import decision
 from . import integrity, pipeline, redownload  # noqa: F401  (registers job handlers)
 from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, public_settings,
                      safe_media_path, save_settings)
@@ -106,6 +107,7 @@ def status():
             "tvdb": bool(s["tvdb_api_key"]), "opensubtitles": bool(s["opensubtitles_api_key"]),
             "llm": llm.available(), "whisper": s["whisper_enabled"],
             "whisper_backend": s["whisper_backend"],
+            "decision": decision.available(), "decision_fast_path": s["decision_fast_path"],
             "titlecards": bool(s["titlecard_enabled"] and titlecard.available()),
             "sonarr": bool(s["sonarr_url"] and s["sonarr_api_key"])}
 
@@ -334,6 +336,10 @@ def test_service(service: str):
             if not (s["llm_base_url"] and s["llm_model"]):
                 return {"ok": False, "message": "Set a base URL and model first."}
             return {"ok": True, "message": f"Model replied: {llm.test_connection()!r}"}
+        if service == "decision":
+            if not decision.available():
+                return {"ok": False, "message": "Enable the decision model and set its URL/model."}
+            return {"ok": True, "message": decision.test_connection()}
         if service == "sonarr":
             r = httpx.get(f"{s['sonarr_url'].rstrip('/')}/api/v3/system/status",
                           headers={"X-Api-Key": s["sonarr_api_key"]}, timeout=15)
