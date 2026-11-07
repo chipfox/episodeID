@@ -475,7 +475,7 @@ def _eliminate(items, eps, root, layout, s, series_name, year) -> None:
         for c in it.get("expected") or []:
             named.setdefault(c, []).append(it)
     unsettled = [it for it in items if it["kind"] == "review" and len(it.get("expected") or []) <= 1
-                 and not strong_other(it) and not it.get("claimed_by")]
+                 and not it.get("sample") and not strong_other(it) and not it.get("claimed_by")]
 
     def season_of(it):
         if it.get("expected"):

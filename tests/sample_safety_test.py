@@ -72,7 +72,29 @@ print("sample multi: ", item["kind"], item["selected"], item["suggested"])
 assert item["kind"] == "review" and item["selected"] is False, item
 assert item["suggested"] == ["S01E01"], item
 
-# 4. A human override still works: an explicit choice is not sample evidence.
+# 4. A sample must not be upgraded by the process-of-elimination pass. This is
+#    the live-stack failure: every other episode in the season was confirmed, so
+#    the planner turned the sample review into "ok".
+elim = []
+for n in range(1, 5):
+    rel = f"Season 01/Sample Show - S01E{n:02d} - Episode {n}.mkv"
+    (root / rel).touch()
+    if n == 2:
+        elim.append({"rel": rel, "expected": ["S01E02"], "status": "LOW_CONFIDENCE",
+                     "duration": 600, "sample_end": 600,
+                     "segments": [sample_segment("S01E02")]})
+    else:
+        elim.append({"rel": rel, "expected": [f"S01E{n:02d}"], "status": "OK",
+                     "duration": 2640,
+                     "segments": [{"start": 0, "end": 2640, "code": f"S01E{n:02d}",
+                                   "score": 0.9, "confidence": "high", "alternatives": []}]})
+by = build(*elim)
+item = by[elim[1]["rel"]]
+print("sample elimination:", item["kind"], item["selected"], item.get("sample"))
+assert item["kind"] == "review" and item["selected"] is False, item
+assert item.get("sample") is True, item
+
+# 5. A human override still works: an explicit choice is not sample evidence.
 by = build({"rel": FILES["wrong"], "expected": ["S01E01"], "status": "MANUAL",
             "duration": 600, "sample_end": 600,
             "segments": [{"start": 0, "end": 600, "code": "S01E02", "override": "S01E02",
