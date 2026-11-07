@@ -381,6 +381,8 @@ def _join_parts(items, files, decided, eps, root, layout, s, series_name, year) 
     by_rel = {f["rel"]: f for f in files}
     groups: dict[str, list[tuple[int, str]]] = {}
     for f in files:
+        if f.get("scope") == "sample":
+            continue
         pk = part_of(f["rel"])
         if pk:
             groups.setdefault(pk[0], []).append((pk[1], f["rel"]))
