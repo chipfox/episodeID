@@ -608,12 +608,24 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         if sample_only and not manually_set:
             high = bool(chosen) and all(c[2] == "high" for c in chosen)
             if len(chosen) != 1 or not high:
-                suggested = [c[1] for c in chosen if c[1]] or list(f.get("expected") or [])
+                candidate_codes = [c.get("code") for c in (f.get("sample_candidates") or []) if c.get("code")]
+                suggested = [c[1] for c in chosen if c[1]] or candidate_codes or list(f.get("expected") or [])
                 end = f.get("sample_end")
-                where = f"first {float(end) / 60:.0f} min" if end else "a sample"
+                windows = f.get("sample_windows") or []
+                window_minutes = int(float(f.get("sample_window_seconds") or 0) / 60) or "short"
+                if windows:
+                    where = f"{len(windows)} x {window_minutes}-min sample windows"
+                else:
+                    where = f"first {float(end) / 60:.0f} min" if end else "a sample"
+                if f.get("language"):
+                    reason = f.get("note") or f"Audio appears to be {f['language']}; English references cannot identify it"
+                elif not chosen and not candidate_codes:
+                    reason = f.get("note") or f"Sample only ({where}) — no episode-like dialogue was found"
+                else:
+                    reason = (f"Sample only ({where}) — {', '.join(suggested) or 'no candidate'} "
+                              "is a suggestion, not proof of the whole file. Check it before renaming.")
                 items.append({**base, "kind": "review", "sample": True,
-                              "reason": f"Sample only ({where}) — {', '.join(suggested) or 'no candidate'} "
-                                        "is a suggestion, not proof of the whole file. Check it before renaming.",
+                              "reason": reason,
                               "suggested": suggested})
                 continue
 

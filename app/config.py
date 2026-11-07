@@ -66,6 +66,9 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "decision_sample_seconds": (600, "DECISION_SAMPLE_SECONDS", False),
     "decision_sample_start": (0, "DECISION_SAMPLE_START", False),
     "decision_fast_path": (False, "DECISION_FAST_PATH", False),
+    "decision_sample_expand": (False, "DECISION_SAMPLE_EXPAND", False),
+    "decision_sample_max_windows": (5, "DECISION_SAMPLE_MAX_WINDOWS", False),
+    "decision_mismatch_windows": (2, "DECISION_MISMATCH_WINDOWS", False),
     "decision_embeddings_enabled": (False, "DECISION_EMBEDDINGS_ENABLED", False),
     # Sonarr
     "sonarr_url": ("", "SONARR_URL", False),

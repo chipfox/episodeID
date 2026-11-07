@@ -108,6 +108,7 @@ def status():
             "llm": llm.available(), "whisper": s["whisper_enabled"],
             "whisper_backend": s["whisper_backend"],
             "decision": decision.available(), "decision_fast_path": s["decision_fast_path"],
+            "decision_sample_expand": bool(s["decision_fast_path"] and s["decision_sample_expand"]),
             "titlecards": bool(s["titlecard_enabled"] and titlecard.available()),
             "sonarr": bool(s["sonarr_url"] and s["sonarr_api_key"])}
 

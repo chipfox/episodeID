@@ -35,6 +35,74 @@ class Cue:
     text: str
 
 
+# ---------------------------------------------------------------- language hints
+#
+# The ASR backend is configured for one subtitle language. That is normally a
+# sufficient guard, but servers do not always report the language they heard.
+# A small function-word detector prevents foreign-language samples from being
+# scored against English references as if they were "no episode match".
+_LANG_STOPWORDS = {
+    "en": {"the", "and", "you", "your", "i", "to", "of", "a", "an", "in", "that",
+           "it", "is", "are", "was", "were", "for", "on", "with", "have", "has",
+           "this", "what", "we", "he", "she", "they", "me", "my", "do", "did"},
+    "es": {"el", "la", "los", "las", "que", "de", "del", "al", "un", "una", "y",
+           "en", "lo", "se", "por", "para", "con", "es", "esta", "está", "su",
+           "me", "te", "si", "sí", "no", "como", "más", "mas", "pero", "fue",
+           "ser", "son", "este", "ese", "esa", "esto", "hombre", "mujeres"},
+    "fr": {"le", "la", "les", "de", "des", "et", "est", "que", "dans", "pour",
+           "pas", "sur", "avec", "vous", "nous", "je", "tu", "il", "elle",
+           "qui", "quoi", "une", "un", "au", "aux", "cette", "mon", "son"},
+    "de": {"der", "die", "das", "und", "ist", "nicht", "ein", "eine", "ich",
+           "du", "sie", "wir", "mit", "auf", "für", "von", "zu", "den", "dem",
+           "des", "wie", "was", "auch", "nur", "noch", "kann", "man"},
+    "it": {"il", "lo", "la", "gli", "le", "di", "che", "e", "per", "con", "un",
+           "una", "non", "sono", "questo", "questa", "come", "più", "piu",
+           "anche", "quando", "dove", "lei", "lui", "noi", "voi"},
+    "pt": {"o", "a", "os", "as", "de", "do", "da", "que", "e", "é", "em", "um",
+           "uma", "não", "nao", "com", "para", "por", "como", "mais", "isso",
+           "este", "esta", "meu", "minha", "você", "voce", "nos"},
+}
+_LANG_PREFIXES = {"spa": "es", "english": "en", "eng": "en", "fre": "fr", "fra": "fr",
+                  "ger": "de", "deu": "de", "ita": "it", "por": "pt"}
+_TOKEN = re.compile(r"(?u)\b[a-zà-ÿ']{2,}\b")
+
+
+def _language_key(value: str | None) -> str:
+    value = str(value or "").strip().lower()
+    if not value:
+        return "en"
+    prefix = value[:3]
+    return _LANG_PREFIXES.get(prefix, _LANG_PREFIXES.get(value, prefix))
+
+
+def detect_language(cues: list | list[list], target_language: str = "en") -> str | None:
+    """Return a non-target language only when the evidence is unambiguous.
+
+    Samples are short and may contain names, sound effects or ASR noise, so this
+    deliberately says `None` rather than guessing.
+    """
+    text = " ".join(
+        str(item[2]) if isinstance(item, (list, tuple)) and len(item) > 2 else str(item)
+        for item in cues
+    )
+    tokens = _TOKEN.findall(text.lower())
+    if len(tokens) < 40:
+        return None
+    scores: dict[str, float] = {}
+    for lang, stopwords in _LANG_STOPWORDS.items():
+        hits = sum(1 for token in tokens if token in stopwords)
+        if hits:
+            scores[lang] = hits / len(tokens)
+    target = _language_key(target_language)
+    if not scores:
+        return None
+    best_lang, best = max(scores.items(), key=lambda item: item[1])
+    target_score = scores.get(target, 0.0)
+    if best_lang == target or best < 0.045 or best < target_score * 1.75:
+        return None
+    return best_lang
+
+
 # ---------------------------------------------------------------- parsing
 
 _TS = re.compile(r"(\d+):(\d{2}):(\d{2})[,.](\d{1,3})")

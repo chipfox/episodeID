@@ -13,7 +13,8 @@ from .executor import (apply_plan, migrate_legacy_backup, sonarr_rescan, sonarr_
                        undo_apply)
 from .jobs import Cancelled, handler
 from .matcher import Matcher, classify, parse_filename_episodes
-from .media_text import cached_dialogue, duration, get_dialogue, probe, sample_dialogue
+from .media_text import (cached_dialogue, detect_language, duration, get_dialogue, probe,
+                         sample_dialogue)
 from .planner import build_plan, list_videos
 from .references import (SAME_EPISODE_SCORE, detect_fandom_wiki, ep_code, load_refs, norm_title,
                          refresh_references, renumber_references,
@@ -231,6 +232,290 @@ def _runtime_minutes(eps: dict) -> float | None:
     return values[len(values) // 2] if values else None
 
 
+def _sample_window_starts(full_duration: float, base_start: float, window: float,
+                          max_windows: int) -> list[float]:
+    """Non-adjacent sample starts, ordered by the places that most often resolve files.
+
+    The first sample is deliberately not enough: ads, commentary, unrelated intros
+    and quiet scenes all live near particular timestamps. Later windows therefore
+    probe a few places before trying to split weak samples into segments.
+    """
+    full = float(full_duration or 0)
+    window = max(1.0, float(window))
+    max_windows = max(1, int(max_windows))
+    starts = [float(base_start)]
+    max_start = max(0.0, full - window) if full else None
+    for offset in (2, 1, 4, 3, 5, 6, 7):
+        if len(starts) >= max_windows:
+            break
+        start = float(base_start) + offset * window
+        if max_start is not None:
+            if start > max_start:
+                start = max_start
+            if start >= full:
+                continue
+        if any(abs(start - existing) < max(15.0, window * 0.05) for existing in starts):
+            continue
+        starts.append(start)
+    return starts
+
+
+def _candidate_from_top(top: list[dict], settings: dict, reference_count: int) -> dict | None:
+    """Apply the same high-confidence boundary the matcher uses for full segments."""
+    if not top:
+        return None
+    best = top[0]
+    second = top[1] if len(top) > 1 else {"code": None, "score": 0.0}
+    score = float(best.get("score") or 0)
+    margin = score - float(second.get("score") or 0)
+    if score < float(settings["min_score"]):
+        return None
+    if margin < float(settings["min_margin"]) or score < 1.4 * max(float(second.get("score") or 0), 1e-6):
+        return None
+    if reference_count < 5 and score < SAME_EPISODE_SCORE:
+        return None
+    return {"code": best.get("code"), "score": round(score, 4), "margin": round(margin, 4),
+            "evidence": "whole", "alternatives": top[1:4]}
+
+
+def _window_from_existing(f: dict, settings: dict, reference_count: int) -> dict:
+    text = str(f.get("sample_text") or "")
+    votes: list[dict] = []
+    for segment in f.get("segments") or []:
+        if segment.get("confidence") == "high" and segment.get("code"):
+            votes.append({**segment, "evidence": segment.get("evidence") or "segment"})
+    whole_candidate = _candidate_from_top(f.get("whole") or [], settings, reference_count)
+    if whole_candidate:
+        votes.append(whole_candidate)
+    deduped: dict[str, dict] = {}
+    for vote in votes:
+        old = deduped.get(vote["code"])
+        if old is None or float(vote.get("score") or 0) > float(old.get("score") or 0):
+            deduped[vote["code"]] = vote
+    language = detect_language([text], settings["subtitle_language"]) if len(text.split()) >= 40 else None
+    return {"start": float(f.get("sample_start") or 0),
+            "end": float(f.get("sample_end") or 0), "source": f.get("text_source") or "none",
+            "words": len(text.split()), "has_text": bool(text.strip()), "language": language,
+            "votes": list(deduped.values()), "whole": (f.get("whole") or [])[:5],
+            "text": text}
+
+
+def _scored_sample_window(video: Path, matcher: Matcher, start: float, duration: float,
+                          expected: list[str], eps: dict, refs: dict, settings: dict,
+                          ctx=None) -> dict:
+    data = sample_dialogue(video, ctx, allow_whisper=True, start=start, duration=duration)
+    cues = data.get("cues") or []
+    text = adjudication.dialogue_text(cues, limit=20000)
+    language = detect_language(cues, settings["subtitle_language"]) if len(text.split()) >= 40 else None
+    if language:
+        return {"start": float(data.get("sample_start", start)),
+                "end": float(data.get("sample_end", start + duration)),
+                "source": data.get("source") or "none", "words": len(text.split()),
+                "has_text": bool(text.strip()), "language": language, "votes": [], "whole": [],
+                "text": text}
+    match_duration = float(data.get("duration") or duration)
+    result = matcher.match_file(cues, match_duration)
+    _discount_unreferenced(result.get("segments") or [], expected, match_duration, refs)
+    result["segments"] = _story_parts(result.get("segments") or [], expected, eps, match_duration)
+    votes: list[dict] = []
+    for segment in result.get("segments") or []:
+        if segment.get("confidence") == "high" and segment.get("code"):
+            votes.append({**segment, "evidence": segment.get("evidence") or "segment"})
+    whole_candidate = _candidate_from_top(result.get("whole") or [], settings, len(matcher.codes))
+    if whole_candidate:
+        votes.append(whole_candidate)
+    deduped: dict[str, dict] = {}
+    for vote in votes:
+        old = deduped.get(vote["code"])
+        if old is None or float(vote.get("score") or 0) > float(old.get("score") or 0):
+            deduped[vote["code"]] = vote
+    return {"start": float(data.get("sample_start", start)),
+            "end": float(data.get("sample_end", start + duration)),
+            "source": data.get("source") or "none", "words": len(text.split()),
+            "has_text": bool(text.strip()), "language": None,
+            "votes": list(deduped.values()), "whole": (result.get("whole") or [])[:5],
+            "text": text}
+
+
+def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: dict,
+                               settings: dict, required_mismatch: int) -> dict:
+    """Vote once per sample window, while treating story parts as non-opposing."""
+    expected_story = set(_story(eps, expected[0])) if len(expected) == 1 and expected[0] in eps else set()
+    expected_votes: list[dict] = []
+    target_votes: dict[str, list[dict]] = {}
+    story_codes: set[str] = set()
+    language_counts: dict[str, int] = {}
+    whole_by_code: dict[str, float] = {}
+    texts: list[str] = []
+    episode_like = False
+
+    for window in windows:
+        if window.get("text"):
+            texts.append(f"[{int(window.get('start', 0)) // 60}–{int(window.get('end', 0)) // 60} min] "
+                         f"{window['text']}")
+        if window.get("language"):
+            language_counts[window["language"]] = language_counts.get(window["language"], 0) + 1
+        for top in window.get("whole") or []:
+            code = top.get("code")
+            if code:
+                whole_by_code[code] = max(whole_by_code.get(code, 0.0), float(top.get("score") or 0))
+        for vote in window.get("votes") or []:
+            code = vote.get("code")
+            if not code:
+                continue
+            episode_like = True
+            if code in expected:
+                expected_votes.append(vote)
+            elif code in expected_story:
+                story_codes.add(code)
+            else:
+                target_votes.setdefault(code, []).append(vote)
+
+    text = "\n".join(texts)
+    if len(text) > 12000:
+        head = 8000
+        text = f"{text[:head]}\n…\n{text[-3000:]}"
+    whole = [{"code": code, "score": round(score, 4)}
+             for code, score in sorted(whole_by_code.items(), key=lambda kv: -kv[1])[:8]]
+
+    def score_of(votes: list[dict]) -> float:
+        return max((float(v.get("score") or 0) for v in votes), default=0.0)
+
+    def target_result(code: str) -> dict:
+        votes = target_votes[code]
+        top = max(votes, key=lambda v: float(v.get("score") or 0))
+        return {"code": code, "votes": len(votes), "score": float(top.get("score") or 0),
+                "evidence": top.get("evidence") or "sample", "alternatives": top.get("alternatives") or []}
+
+    candidates = [{"code": code, "votes": len(votes), "score": round(score_of(votes), 4),
+                   "evidence": "sample"} for code, votes in target_votes.items()]
+    if expected_votes:
+        candidates.insert(0, {"code": expected_votes[0].get("code"), "votes": len(expected_votes),
+                              "score": round(score_of(expected_votes), 4), "evidence": "sample"})
+    candidates.extend({"code": code, "votes": 0, "score": 0.0, "evidence": "story-part"}
+                      for code in story_codes)
+
+    targets = sorted((target_result(code) for code in target_votes),
+                     key=lambda item: (item["votes"], item["score"]), reverse=True)
+    has_text = any(window.get("has_text") for window in windows)
+    languages = sorted(language_counts, key=lambda code: -language_counts[code])
+    all_windows_language = bool(languages) and sum(language_counts.values()) == len(windows)
+
+    if not has_text:
+        return {"status": "NO_TEXT", "code": None, "note": "No sample window produced dialogue",
+                "episode_like": False, "candidates": candidates, "whole": whole, "text": ""}
+    if all_windows_language and not expected_votes and not target_votes:
+        return {"status": "NO_MATCH", "code": None, "language": languages[0],
+                "note": f"Audio appears to be {languages[0]}; English references cannot identify it",
+                "episode_like": False, "candidates": candidates, "whole": whole, "text": text}
+    if not expected_votes and not target_votes:
+        return {"status": "NO_MATCH", "code": None,
+                "note": ("No sample window contained episode-like dialogue" if not episode_like else
+                         "Sample windows agree on a story part, but not on one episode"),
+                "episode_like": episode_like or bool(story_codes), "candidates": candidates,
+                "whole": whole, "text": text}
+    if expected_votes and not target_votes:
+        top = max(expected_votes, key=lambda v: float(v.get("score") or 0))
+        return {"status": "OK", "code": expected_votes[0].get("code"),
+                "score": float(top.get("score") or 0), "votes": len(expected_votes),
+                "note": f"Sample windows confirm {expected_votes[0].get('code')}",
+                "episode_like": True, "candidates": candidates, "whole": whole, "text": text}
+    if expected_votes and target_votes:
+        return {"status": "LOW_CONFIDENCE", "code": None,
+                "note": "Sample windows support the filename and another episode",
+                "episode_like": True, "candidates": candidates, "whole": whole, "text": text}
+    best = targets[0] if targets else None
+    if best and best["votes"] >= max(1, int(required_mismatch)):
+        return {"status": "MISMATCH", "code": best["code"], "score": best["score"],
+                "votes": best["votes"], "alternatives": best.get("alternatives") or [],
+                "note": f"Multiple sample windows match {best['code']}",
+                "episode_like": True, "candidates": candidates, "whole": whole, "text": text}
+    return {"status": "LOW_CONFIDENCE", "code": None,
+            "note": (f"{best['code']} is suggested once, but the filename needs more evidence"
+                     if best else "Sample evidence is not strong enough"),
+            "episode_like": True, "candidates": candidates, "whole": whole, "text": text}
+
+
+def _apply_sample_aggregate(f: dict, agg: dict, window_seconds: float) -> None:
+    status = agg["status"]
+    f["status"] = status
+    f["sample_text"] = agg.get("text") or ""
+    f["whole"] = agg.get("whole") or []
+    f["sample_candidates"] = agg.get("candidates") or []
+    f["episode_like"] = bool(agg.get("episode_like"))
+    f["note"] = agg.get("note") or f.get("note") or ""
+    if agg.get("language"):
+        f["language"] = agg["language"]
+    if status in ("OK", "MISMATCH"):
+        code = agg["code"]
+        score = float(agg.get("score") or 0)
+        runner_up = max((float(x.get("score") or 0) for x in agg.get("whole") or []
+                         if x.get("code") != code), default=0.0)
+        segment = {"start": 0.0, "end": float(f.get("file_duration") or f.get("duration") or window_seconds),
+                   "code": code, "score": round(score, 4),
+                   "margin": round(score - runner_up, 4),
+                   "confidence": "high", "scope": "sample",
+                   "alternatives": [x for x in agg.get("candidates") or [] if x.get("code") != code],
+                   "words": len((agg.get("text") or "").split()),
+                   "evidence": "sample-windows", "why": ""}
+        f["segments"] = [segment]
+        f["note"] = agg.get("note") or f"Sample windows support {code}"
+    else:
+        f["segments"] = []
+    windows = len(f.get("sample_windows") or [])
+    if windows:
+        f["note"] += f" ({windows} sampled windows)"
+
+
+def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict], matcher: Matcher,
+                              eps: dict, refs: dict, settings: dict, ctx) -> None:
+    base_start = float(settings["decision_sample_start"])
+    window = float(settings["decision_sample_seconds"])
+    max_windows = max(1, int(settings["decision_sample_max_windows"]))
+    required = max(1, int(settings["decision_mismatch_windows"]))
+    todo = [f for f in files if f.get("scope") == "sample" and f.get("status") != "OK"]
+    if not todo:
+        return
+    ctx.log(f"Sample adjudication: rechecking {len(todo)} sampled file(s) with up to "
+            f"{max_windows} windows")
+    for n, f in enumerate(todo):
+        ctx.check_cancel()
+        ctx.progress(n / max(1, len(todo)), f"Sample evidence: {Path(f['rel']).name}")
+        expected = f.get("expected") or []
+        video = videos_by_rel.get(f["rel"])
+        if video is None:
+            continue
+        initial_start = float(f.get("sample_start") or base_start)
+        windows = [_window_from_existing(f, settings, len(matcher.codes))]
+        for start in _sample_window_starts(f.get("file_duration") or 0, initial_start,
+                                           window, max_windows):
+            if any(abs(start - float(w.get("start", initial_start))) < max(15, window * 0.25)
+                   for w in windows):
+                continue
+            try:
+                windows.append(_scored_sample_window(video, matcher, start, window, expected,
+                                                      eps, refs, settings, ctx))
+            except Exception as e:  # noqa: BLE001 — sample expansion is optional evidence
+                ctx.log(f"  couldn't sample {start / 60:.0f} min of {Path(f['rel']).name}: {e}")
+            f["sample_windows"] = [{k: w.get(k) for k in
+                                    ("start", "end", "source", "words", "has_text", "language", "votes", "whole")}
+                                   for w in windows]
+            agg = _aggregate_sample_evidence(expected, windows, eps, settings, required)
+            if agg["status"] in ("OK", "MISMATCH"):
+                break
+            if agg.get("language") and len(windows) >= min(2, max_windows):
+                break
+        f["sample_windows"] = [{k: w.get(k) for k in
+                                ("start", "end", "source", "words", "has_text", "language", "votes", "whole")}
+                               for w in windows]
+        f["sample_start"] = min(float(w.get("start") or initial_start) for w in windows)
+        f["sample_end"] = max(float(w.get("end") or initial_start + window) for w in windows)
+        f["sample_window_seconds"] = window
+        agg = _aggregate_sample_evidence(expected, windows, eps, settings, required)
+        _apply_sample_aggregate(f, agg, window)
+        ctx.log(f"  {f['status']:<16} {Path(f['rel']).name}: {f['note']}")
+
+
 @handler("scan")
 def job_scan(ctx, params):
     s = get_settings()
@@ -356,6 +641,10 @@ def job_scan(ctx, params):
         for sg in res["segments"]:
             if sg.get("why"):
                 ctx.log(f"{'':<16}   {sg['code']}? {sg['why']}")
+
+    videos_by_rel = {rel: v for v, rel, *_ in read}
+    if fast and s.get("decision_sample_expand") and matcher:
+        _sample_confirmation_pass(videos_by_rel, files, matcher, eps, refs, s, ctx)
 
     scanned = [f for f in files if f.get("scope") != "sample"]
     if scanned:
@@ -1155,7 +1444,7 @@ def _vision_check(video: Path, f: dict, cards: list[dict], index, series_name: s
 def _decision_pass(series, files, eps, ctx):
     """Ask Laya only about sample-scoped files. Its choice stays provisional."""
     todo = [f for f in files if f.get("scope") == "sample"
-            and f.get("status") not in ("OK", "MISMATCH")]
+            and f.get("status") not in ("OK", "MISMATCH") and not f.get("language")]
     if not todo:
         return
     ctx.log(f"Decision model: asking {get_settings()['decision_model']} about {len(todo)} "
