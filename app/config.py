@@ -61,7 +61,7 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "decision_model": ("laya", "DECISION_MODEL", False),
     "decision_timeout": (30, "DECISION_TIMEOUT", False),
     "decision_max_candidates": (4, "DECISION_MAX_CANDIDATES", False),
-    "decision_max_input_chars": (1600, "DECISION_MAX_INPUT_CHARS", False),
+    "decision_max_input_chars": (800, "DECISION_MAX_INPUT_CHARS", False),
     "decision_sample_seconds": (600, "DECISION_SAMPLE_SECONDS", False),
     "decision_sample_start": (0, "DECISION_SAMPLE_START", False),
     "decision_fast_path": (False, "DECISION_FAST_PATH", False),

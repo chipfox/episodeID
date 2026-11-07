@@ -29,7 +29,8 @@ def candidates(file_result: dict, episodes: dict, limit: int) -> list[dict]:
         score = next((w.get("score") for w in file_result.get("whole") or []
                       if w.get("code") == code), None)
         out.append({"code": code, "title": episodes[code].get("title") or code,
-                    "overview": episodes[code].get("overview") or "", "score": score})
+                    "overview": (episodes[code].get("overview") or "")[:180],
+                    "score": score})
         if len(out) >= limit:
             break
     return out
