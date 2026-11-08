@@ -50,6 +50,10 @@ lex = evidence.Lexicon(eps, refs, story=story, conflict_similarity=0.85)
 assert lex.conflicting("S04E12") == ["S04E14"], lex.conflicting("S04E12")
 assert lex.conflicting("S04E14") == ["S04E12"], lex.conflicting("S04E14")
 assert lex.conflicting("S09E01") == [], lex.conflicting("S09E01")
+# Story parts are still flagged for transcript repair — the identical copy is
+# the whole story filed twice — but they never block a decision question.
+assert lex.story_pair_for("S09E01") == ["S09E02", 1.0], lex.story_pair_for("S09E01")
+assert [p["codes"] for p in lex.story_pair_conflicts()] == [["S09E01", "S09E02"]]
 assert lex.conflict_pairs() == [{"codes": ["S04E12", "S04E14"],
                                  "similarity": lex._conflicts["S04E12"][0][1]}], lex.conflict_pairs()
 

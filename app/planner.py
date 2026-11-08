@@ -635,6 +635,11 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 elif f.get("reference_conflict"):
                     reason += (f" — not asked: {'/'.join(f['reference_conflict'])} shares this "
                                "episode's reference transcript.")
+                elif f.get("story_pair_overlap"):
+                    ov = f["story_pair_overlap"]
+                    reason += (f" — its reference is {ov['similarity']:.0%} the same as {ov['with']}'s "
+                               "(one story recorded twice). Full-file match, or fetch references "
+                               "again to get per-part transcripts.")
                 items.append({**base, "kind": "review", "sample": True,
                               "reason": reason,
                               "suggested": suggested,

@@ -30,6 +30,8 @@ _WINDOW = re.compile(r"^\[(\d+)\u2013(\d+) min\]\s*(.*)$", re.S)
 
 DESCRIPTOR_CHARS = 95      # title + the most distinctive sentence, trimmed
 MIN_CONFLICT_WORDS = 200   # a two-line stub is not evidence of a duplicate
+STORY_PAIR_SIMILARITY = 0.6  # parts of one story legitimately share a cold open;
+                             # above this their references are worth re-fetching apart
 TOP_TERMS = 80             # distinctive terms kept per episode
 
 
@@ -73,6 +75,7 @@ class Lexicon:
         self._weights: dict[str, dict[str, float]] = {}
         self._descriptors: dict[str, str] = {}
         self._conflicts: dict[str, list[tuple[str, float]]] = {}
+        self._story_pairs: dict[str, list[tuple[str, float]]] = {}
         self._build_weights()
         self._build_descriptors()
         self._find_conflicts(float(conflict_similarity))
@@ -138,15 +141,45 @@ class Lexicon:
         for i, a in enumerate(codes):
             for j in range(i + 1, len(codes)):
                 b = codes[j]
-                if sims[i][j] < threshold or stories[i] & stories[j]:
-                    continue
                 sim = round(float(sims[i][j]), 3)
+                if stories[i] & stories[j]:
+                    # Two parts of one story may share a cold open, but a shared
+                    # majority of the transcript means the reference is the whole
+                    # story filed twice — worth replacing with per-part copies.
+                    if sim >= STORY_PAIR_SIMILARITY:
+                        self._story_pairs.setdefault(a, []).append((b, sim))
+                        self._story_pairs.setdefault(b, []).append((a, sim))
+                    continue
+                if sim < threshold:
+                    continue
                 self._conflicts.setdefault(a, []).append((b, sim))
                 self._conflicts.setdefault(b, []).append((a, sim))
 
     def conflicting(self, code: str) -> list[str]:
         return [other for other, _ in sorted(self._conflicts.get(code) or [],
                                              key=lambda item: -item[1])]
+
+    def story_pair_for(self, code: str) -> list | None:
+        """(other code, similarity) when this episode's reference overlaps its own
+        story part's too much to tell them apart."""
+        items = self._story_pairs.get(code) or []
+        return list(max(items, key=lambda item: item[1])) if items else None
+
+    def story_pair_conflicts(self) -> list[dict]:
+        """Story parts whose references overlap each other's too much to tell the
+        parts apart. Unlike plain conflicts these never block a question — both
+        parts genuinely resemble the file — but their transcripts are worth
+        re-fetching apart."""
+        seen: set[tuple[str, str]] = set()
+        out: list[dict] = []
+        for a, items in self._story_pairs.items():
+            for b, sim in items:
+                key = (a, b) if a < b else (b, a)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({"codes": list(key), "similarity": sim, "story": True})
+        return sorted(out, key=lambda pair: -pair["similarity"])
 
     def conflict_pairs(self) -> list[dict]:
         seen: set[tuple[str, str]] = set()

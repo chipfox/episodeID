@@ -551,6 +551,10 @@ def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict],
         f["sample_window_seconds"] = window
         agg = _aggregate_sample_evidence(expected, windows, eps, settings, required, conflicts)
         _apply_sample_aggregate(f, agg, window)
+        if lex is not None and len(expected) == 1 and f["status"] in ("NO_MATCH", "LOW_CONFIDENCE"):
+            pair = lex.story_pair_for(expected[0])
+            if pair:
+                f["story_pair_overlap"] = {"with": pair[0], "similarity": pair[1]}
         ctx.log(f"  {f['status']:<16} {Path(f['rel']).name}: {f['note']}")
 
 
@@ -591,9 +595,12 @@ def job_scan(ctx, params):
         only = set(params["only"])
         videos = [v for v in videos if str(v.relative_to(root)) in only]
     ctx.log(f"Scanning {len(videos)} video files in {root}")
-    fast = bool(s["decision_fast_path"])
+    fast = bool(s["decision_fast_path"]) and not params.get("full")
     runtime_min = _runtime_minutes(eps)
-    if fast:
+    if params.get("full"):
+        ctx.log("Full-file matching requested for the selected files: the whole transcript "
+                "is read, so a match covers the entire episode, not a sample.")
+    elif fast:
         ctx.log(f"Fast path: sampling the first {int(s['decision_sample_seconds']) // 60} min "
                 "of single-episode files; multi-episode and long files use the full matcher.")
     # 1. Read every file's dialogue (cached unless new or replaced).
@@ -605,7 +612,7 @@ def job_scan(ctx, params):
         expected = parse_filename_episodes(v.name)
         try:
             dlg = None
-            if fast and _sample_eligible(v, expected, eps, runtime_min, s):
+            if fast and not params.get("full") and _sample_eligible(v, expected, eps, runtime_min, s):
                 dlg = sample_dialogue(v, ctx, allow_whisper=params.get("whisper", True),
                                       start=s["decision_sample_start"],
                                       duration=s["decision_sample_seconds"])

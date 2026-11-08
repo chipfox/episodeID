@@ -916,7 +916,7 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
     except Exception as e:  # noqa: BLE001
         ctx.log(f"Reference repair: couldn't compare references ({e}).")
         return {"conflicts": 0, "replaced": 0}
-    pairs = lex.conflict_pairs()
+    pairs = lex.conflict_pairs() + lex.story_pair_conflicts()
     out = {"conflicts": len(pairs), "replaced": 0}
     if not pairs:
         return out

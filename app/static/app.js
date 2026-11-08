@@ -609,6 +609,7 @@ async function tabPlan(reload = true) {
     } catch (err) { fail(err); }
   });
   $$("button.ai-check", tab).forEach((b) => b.onclick = () => { startJob("ai_check", { source: b.dataset.src }); toast("Asking the AI — see the job log; the plan updates when it answers."); });
+  $$("button.full-scan", tab).forEach((b) => b.onclick = () => { startJob("scan", { only: [b.dataset.src], full: true }); toast("Re-reading the whole file — a full transcript takes a minute or two; the plan updates when it finishes."); });
   $$("button.cut-pick", tab).forEach((b) => b.onclick = () =>
     cutDialog(plan, plan.items.find((x) => String(x.id) === b.dataset.iid)));
   $$("button.clear-ov", tab).forEach((b) => b.onclick = async () => {
@@ -1005,6 +1006,7 @@ function rowHtml(it, eps, applied) {
       ${ovr ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">Clear</button>` : ""}`}
       <button class="btn small card-check" data-src="${esc(it.source)}" style="margin-top:4px" title="See what the title-card OCR reads in part of this file">Check title cards…</button>
       ${state.ai && !applied && it.kind !== "ok" && it.text_source && it.text_source !== "none" ? `<button class="btn small ai-check" data-src="${esc(it.source)}" style="margin-top:4px" title="Ask the AI which episode this file's dialogue is, from the TVDB summaries of the likely episodes">Ask AI</button>` : ""}
+      ${it.kind === "review" && it.sample && !applied ? `<button class="btn small full-scan" data-src="${esc(it.source)}" style="margin-top:4px" title="Transcribe and match the whole file — settles it with every line, not just the sample windows">Full-file match</button>` : ""}
       ${it.kind === "split" && !applied ? `<button class="btn small cut-pick" data-iid="${it.id}" style="margin-top:4px" title="See where this file would be split, with pictures, and choose">Choose cut points…</button>` : ""}</td>
   </tr>`;
 }
