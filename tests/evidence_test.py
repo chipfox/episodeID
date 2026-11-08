@@ -136,4 +136,13 @@ assert agg["status"] == "MISMATCH" and agg["code"] == "S04E14", agg
 claim_only = [{"code": "S04E12", "score": 0.4, "confidence": "high", "evidence": "whole"}]
 agg = _aggregate_sample_evidence(["S04E12"], [window(claim_only)], eps, SETTINGS, 2, {"S04E14"})
 assert agg["status"] == "OK", agg
+
+# dialogue_text reads the cached [start, end, text] cue shape and clips to a
+# head+tail, exactly as the packet budget requires (a dict-shaped cue also works).
+from app.adjudication import dialogue_text  # noqa: E402
+
+assert dialogue_text([[0, 2, "First line."], [3, 5, "Second line."]]) == "First line. Second line."
+assert dialogue_text([{"text": "Dict line."}, [4, 6, "List line."]]) == "Dict line. List line."
+clip = dialogue_text([[0, 1, "word " * 30]] * 60, limit=150)
+assert len(clip) <= 150 + len(" … ") and "…" in clip, clip
 print("PASS")

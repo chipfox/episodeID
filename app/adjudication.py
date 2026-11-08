@@ -20,12 +20,21 @@ from .config import get_settings
 from .references import ep_code
 
 
-def dialogue_text(cues: list[dict], limit: int = 1400) -> str:
+def dialogue_text(cues: list, limit: int = 1400) -> str:
     """Clip dialogue so the model prompt stays small: head and tail, never a
     middle — the opening scene and the closing lines are where episodes
-    differ most within a limited budget."""
-    text = " ".join(str(c.get("text") or "").strip() for c in cues[:limit]).strip()
-    return text
+    differ most within a limited budget. Cues are [start, end, text] lists
+    (the cache and Matcher shape) or dicts with a text key."""
+    parts = []
+    for cue in cues:
+        text = cue.get("text") if isinstance(cue, dict) else (cue[2] if len(cue) > 2 else "")
+        if text:
+            parts.append(str(text).strip())
+    text = " ".join(" ".join(parts).split())
+    if len(text) <= limit:
+        return text
+    head = limit * 2 // 3
+    return f"{text[:head]} … {text[-(limit - head):]}"
 
 
 def candidates(file_result: dict, episodes: dict[str, dict], limit: int,
