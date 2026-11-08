@@ -513,3 +513,29 @@ Full-file matching is reachable again from a sample review: `job_scan` honours
 to the selected file, and the other files' plan rows are kept). The plan view renders a
 **Full-file match** button on sample review rows. Live check on `S09E01`: whole-file transcription
 also ends `NO_MATCH`, confirming the pair is unresolvable by text alone rather than by sampling.
+
+### Why story parts can't be split by text (measured)
+
+Both `S09E01` and `S09E02` references open with the same scene, word for word ("Vodka rocks,
+please… the water actually in the ice"), and each is a different *release* of the whole two-parter:
+the two files' openings appear in *both* transcripts. So the pairs differ only by transcription,
+not by content (0.84 TF-IDF, same scenes). Consequences measured live:
+
+- A whole-file match scores the `S09E01` file 0.812 against the `S09E02` reference and 0.719
+  against its own; the ranking means nothing because the content is the same.
+- Full-file matching on `S09E01` also ends `NO_MATCH` — sampling is not the limit.
+- Repair cannot fix them: the replacements are just as alike.
+
+No amount of extra sampling, windows, or models decides these parts; only per-part transcripts
+(wiki pages that separate the parts) would. Until then the honest answer is the review row, which
+now says exactly that.
+
+## Golden set
+
+`tests/golden/xfiles.json` records the audited truth (217 files: six swaps, four undecidable) and
+`tools/golden_check.py` scores a live or saved plan against it — exit 1 on a wrong rename, a swap
+left in place, or any other change. Use it before and after every scanner change:
+
+```bash
+python3 tools/golden_check.py --plan http://10.0.0.151:8687/api/series/2/plan
+```
