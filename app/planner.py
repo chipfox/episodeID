@@ -635,11 +635,11 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 elif f.get("reference_conflict"):
                     reason += (f" — not asked: {'/'.join(f['reference_conflict'])} shares this "
                                "episode's reference transcript.")
-                elif f.get("story_pair_overlap"):
+                if f.get("story_pair_overlap"):
                     ov = f["story_pair_overlap"]
                     reason += (f" — its reference is {ov['similarity']:.0%} the same as {ov['with']}'s "
-                               "(one story recorded twice). Full-file match, or fetch references "
-                               "again to get per-part transcripts.")
+                               "reference (one story recorded twice), so neither the sample nor the "
+                               "whole file can pick the part; the filename has to decide.")
                 items.append({**base, "kind": "review", "sample": True,
                               "reason": reason,
                               "suggested": suggested,
@@ -651,8 +651,13 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         if f["status"] in ("NO_TEXT",) or not usable or len(usable) != len(chosen) \
                 or (f.get("hold") and f["status"] != "MANUAL"):
             # Not enough evidence to act on every part of this file.
+            reason = f.get("note") or "Needs a decision"
+            if f.get("story_pair_overlap"):
+                ov = f["story_pair_overlap"]
+                reason += (f" — its reference is {ov['similarity']:.0%} the same as {ov['with']}'s "
+                           "reference (one story recorded twice); the filename has to decide.")
             items.append({**base, "kind": "review",
-                          "reason": f.get("note") or "Needs a decision",
+                          "reason": reason,
                           "suggested": [c[1] for c in chosen]})
             continue
 
