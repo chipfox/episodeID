@@ -3,16 +3,11 @@
   "series_id": 2,
   "tvdb_id": 77398,
   "recorded": "2026-11-07",
-  "notes": "Truth from a full audit: every filename is correct except six swapped files. S09E01/S09E02 and S09E19/S09E20 cannot be decided from text: OpenSubtitles files each two-parter as one transcript, so both episode numbers get the whole story, and S05E15 is Spanish audio with English-only references. Those four are 'any' - a review row is the right answer, not a miss.",
-  "swaps": {
-    "Season 05/The X-Files - S05E08 - Kitsunegari - Bluray-1080p x265 Opus 5.1.mkv": "S05E10",
-    "Season 05/The X-Files - S05E09 - Schizogeny - Bluray-1080p x265 Opus 5.1.mkv": "S05E11",
-    "Season 05/The X-Files - S05E10 - Chinga - Bluray-1080p x265 Opus 5.1.mkv": "S05E08",
-    "Season 05/The X-Files - S05E11 - Kill Switch - Bluray-1080p x265 Opus 5.1.mkv": "S05E09",
-    "Season 09/The X-Files - S09E14 - Scary Monsters - Bluray-1080p x265 Opus 5.1.mkv": "S09E16",
-    "Season 09/The X-Files - S09E16 - William - Bluray-1080p x265 AC3 5.1.mkv": "S09E14"
-  },
+  "notes": "Truth after the audit and the apply. The six swapped files were confirmed by picture, not text — a title-card OCR read 'LORTON PENITENTIARY HOSPITAL WARD' in the file named Chinga and 'Honey & Hickory Chicken Wings' in the file named Kitsunegari; the S05E09-named file shows a computer lab and the S05E11-named file a wintry ravine; the S09E14-named file's own audio is the relinquished-baby scene and the S09E16-named file's is the boy afraid of the mirror — then renamed, so every filename here is now correct. Six files get a review row and that is the right answer, not a miss: S04E12/S04E14 share one reference transcript (0.998 apart even after repair), so no verdict is defensible; S09E01/S09E02 and S09E19/S09E20 are two-parters that OpenSubtitles files as a single story each, and the 91-minute S09E19-20 file is longer than the transcription server accepts in one request; S05E15 is Spanish audio against English references.",
+  "swaps": {},
   "undecidable": [
+    "Season 04/The X-Files - S04E12 - Leonard Betts - Bluray-1080p x265 Opus 5.1.mkv",
+    "Season 04/The X-Files - S04E14 - Memento Mori - Bluray-1080p x265 Opus 5.1.mkv",
     "Season 05/The X-Files - S05E15 - Travelers - HDTV-1080p Proper AV1 Opus 2.0 [ES].mkv",
     "Season 09/The X-Files - S09E01 - Nothing Important Happened Today (1) - Bluray-1080p x265 Opus 5.1.mkv",
     "Season 09/The X-Files - S09E02 - Nothing Important Happened Today (2) - Bluray-1080p x265 Opus 5.1.mkv",

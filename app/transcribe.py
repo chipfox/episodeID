@@ -24,7 +24,7 @@ import httpx
 import numpy as np
 
 from .config import CACHE_DIR, get_settings
-from .media_text import Cue, _lang_ok, probe
+from .media_text import Cue, _lang_ok, duration_of, probe
 
 SAMPLE_RATE = 16000  # what Whisper expects
 
@@ -161,6 +161,20 @@ def _encode_remote_audio(video: Path, lang: str, start: float = 0.0,
     return r.stdout
 
 
+def _refused(body: str, status: int, minutes: float | None = None) -> RuntimeError:
+    """Say what to do about a refused upload instead of dumping the server's JSON.
+
+    The transcription server caps how long one request may be, so a two-part or
+    feature-length file is refused whole. That is worth naming: it is the one
+    failure a re-run can never fix, and a plan reason should not hide it in a payload.
+    """
+    if minutes is not None and status == 400 and "exceeds configured limit" in body:
+        return RuntimeError(
+            f"this audio is {minutes:.0f} min — longer than the transcription server "
+            "accepts in one request, so its audio cannot be read")
+    return RuntimeError(f"remote transcription failed ({status}): {body[:300]}")
+
+
 def _float(value, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -256,8 +270,7 @@ def _remote_transcribe(video: Path, ctx=None, start: float = 0.0,
     except (httpx.HTTPError, ValueError) as e:
         raise RuntimeError(f"remote transcription request failed: {e}") from e
     if response.status_code < 200 or response.status_code >= 300:
-        raise RuntimeError(f"remote transcription failed ({response.status_code}): "
-                           f"{response.text[:300]}")
+        raise _refused(response.text, response.status_code, duration_of(probe(video)) / 60)
     try:
         payload = response.json()
     except ValueError:

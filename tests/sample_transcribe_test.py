@@ -76,3 +76,31 @@ transcribe.httpx.post = lambda *args, **kwargs: TextOnly()
 plain = transcribe.transcribe(video, start=300, duration=60)
 assert plain[0].start == 300 and plain[0].end == 360, plain[0]
 print("PASS")
+
+# A file the transcription server refuses because of its length must say so plainly:
+# a re-run can never fix it, and the plan shows this text to a human.
+class TooLong(Response):
+    status_code = 400
+    text = ('{"error":{"code":null,"message":"Show - S01E01.mkv: audio exceeds '
+            'configured limit","param":null,"type":"invalid_request_error"}}')
+
+
+transcribe.httpx.post = lambda *args, **kwargs: TooLong()
+try:
+    transcribe.transcribe(video)
+    raise AssertionError("a refused upload must raise")
+except RuntimeError as e:
+    assert "45 min" in str(e) and "{" not in str(e), e
+
+# Any other refusal still shows what the server actually said.
+class Broken(Response):
+    status_code = 500
+    text = "model load failed"
+
+
+transcribe.httpx.post = lambda *args, **kwargs: Broken()
+try:
+    transcribe.transcribe(video)
+    raise AssertionError("a server error must raise")
+except RuntimeError as e:
+    assert "model load failed" in str(e), e
