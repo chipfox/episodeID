@@ -700,6 +700,12 @@ def job_scan(ctx, params):
                  "sample_text": adjudication.dialogue_text(dlg["cues"]) if sampled else "",
                  "segments": res["segments"], "whole": res["whole"],
                  "status": status, "note": note}
+        if dlg.get("language") and not sampled:
+            entry["language"] = dlg["language"]
+            entry["status"] = "NO_MATCH"
+            entry["note"] = (f"The dialogue is {dlg['language']}, not "
+                             f"{s['subtitle_language']} — it cannot be matched "
+                             "against the references")
         if (not sampled and lex is not None and len(expected) == 1
                 and status in ("NO_MATCH", "LOW_CONFIDENCE")):
             pair = lex.story_pair_for(expected[0])
@@ -1549,6 +1555,11 @@ def _llm_file(series, f, eps, claimed, no_ref, ctx, force: bool = False):
     """Ask the AI about one file's unsettled segments (force: every segment). Returns
     False if the AI endpoint failed."""
     dlg = get_dialogue(Path(series["path"]) / f["rel"], ctx)
+    if dlg.get("language"):
+        ctx.log(f"  {f['rel']}: the dialogue is {dlg['language']}, not "
+                f"{get_settings()['subtitle_language']} — the episode summaries are in "
+                "English, so the AI cannot judge this file")
+        return True
     segs = f["segments"]
     if not segs:
         segs = [{"start": 0, "end": dlg["duration"], "code": None, "score": 0,
