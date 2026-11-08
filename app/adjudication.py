@@ -17,7 +17,6 @@ from pathlib import Path
 
 from . import decision, evidence
 from .config import get_settings
-from .references import ep_code
 
 
 def dialogue_text(cues: list, limit: int = 1400) -> str:
