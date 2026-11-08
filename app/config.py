@@ -72,7 +72,6 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "decision_sample_expand": (False, "DECISION_SAMPLE_EXPAND", False),
     "decision_sample_max_windows": (5, "DECISION_SAMPLE_MAX_WINDOWS", False),
     "decision_mismatch_windows": (2, "DECISION_MISMATCH_WINDOWS", False),
-    "decision_embeddings_enabled": (False, "DECISION_EMBEDDINGS_ENABLED", False),
     # Sonarr
     "sonarr_url": ("", "SONARR_URL", False),
     "sonarr_api_key": ("", "SONARR_API_KEY", True),

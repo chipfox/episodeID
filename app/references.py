@@ -23,6 +23,7 @@ import httpx
 
 from . import wikihttp
 from . import tvdb
+from . import textsim
 from .config import CACHE_DIR, CONFIG_DIR, get_settings
 from .media_text import SUB_EXTS, parse_subtitle_text, read_text_file
 from . import __version__
@@ -829,15 +830,11 @@ def verify_flagged(series: dict, ctx) -> dict:
     result = {"verified": 0, "removed": 0, "pending": len(flagged)}
     if not flagged or len(trusted) < 3:
         return result
-    from sklearn.feature_extraction.text import TfidfVectorizer
     codes = sorted(trusted)
-    vec = TfidfVectorizer(lowercase=True, strip_accents="unicode", sublinear_tf=True,
-                          stop_words="english", max_df=0.6 if len(codes) >= 10 else 1.0,
-                          token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z']+\b")
-    T = vec.fit_transform([trusted[c] for c in codes])
+    score = textsim.scorer([trusted[c] for c in codes])
     misses = _load_misses(tvdb_id)
     for code, r in sorted(flagged.items()):
-        sims = (vec.transform([r["text"]]) @ T.T).toarray()[0]
+        sims = score(r["text"])
         order = sims.argsort()[::-1]
         best_i = next((i for i in order if codes[i] != code), None)
         best_code, best = (codes[best_i], float(sims[best_i])) if best_i is not None else (None, 0.0)
@@ -886,11 +883,7 @@ def _save_repairs(tvdb_id: int, repairs: dict) -> None:
 
 def _text_similarity(a: str, b: str) -> float:
     """TF-IDF cosine between two transcripts — the same view verify_flagged uses."""
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    vec = TfidfVectorizer(lowercase=True, strip_accents="unicode", sublinear_tf=True,
-                          stop_words="english", token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z']+\b")
-    m = vec.fit_transform([a or "", b or ""])
-    return float((m @ m.T).toarray()[0][1])
+    return textsim.similarity(a, b)
 
 
 def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int = 4,
@@ -929,7 +922,8 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
                 wanted.append(code)
     if not wanted:
         ctx.log(f"Reference conflicts: {len(pairs)} pair(s) share a transcript, and none of them "
-                "can be replaced automatically (manual references or already repaired).")
+                "can be replaced automatically (manual references, already replaced, or tried "
+                "once with replacements that were the same text).")
         return out
     wanted = wanted[:max(2, int(max_downloads))]
     os_ = OpenSubtitles()
@@ -940,6 +934,7 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
         return out
     fetched: dict[str, dict] = {}
     replaced = 0
+    touched = False
     try:
         os_.login()
         ctx.log(f"Reference repair: {len(pairs)} pair(s) share one transcript — searching "
@@ -964,9 +959,18 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
             a, b = pair["codes"]
             na, nb = fetched.get(a), fetched.get(b)
             if na and nb:
-                if _text_similarity(na["text"], nb["text"]) >= SAME_EPISODE_SCORE:
-                    ctx.log(f"{a}/{b}: OpenSubtitles' replacements still match each other — "
-                            "keeping the old references; a human needs to pick the transcripts")
+                sim = _text_similarity(na["text"], nb["text"])
+                if sim >= SAME_EPISODE_SCORE:
+                    # Tried and failed is worth remembering: OpenSubtitles files this
+                    # story as one transcript too, and re-downloading both copies on
+                    # every fetch would waste quota forever without changing anything.
+                    for code in (a, b):
+                        repairs[code] = {"keep": True, "why": "replacement matched the other part",
+                                         "similarity": round(sim, 3)}
+                    touched = True
+                    ctx.log(f"{a}/{b}: OpenSubtitles' replacements still match each other "
+                            f"({sim:.2f}) — keeping the old references. Won't look again for this "
+                            "pair; a human has to pick the transcripts.")
                     continue
                 for code, ref in ((a, na), (b, nb)):
                     _replace_reference(tvdb_id, code, ref, repairs,
@@ -980,9 +984,13 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
                     continue
                 other = b if code == a else a
                 current = (old.get(other) or {}).get("text") or ""
-                if current and _text_similarity(new["text"], current) >= SAME_EPISODE_SCORE:
-                    ctx.log(f"{code}: the replacement still resembles {other}'s reference — "
-                            "keeping the old one")
+                sim = _text_similarity(new["text"], current) if current else 0.0
+                if current and sim >= SAME_EPISODE_SCORE:
+                    repairs[code] = {"keep": True, "why": "replacement matched the other part",
+                                     "similarity": round(sim, 3)}
+                    touched = True
+                    ctx.log(f"{code}: the replacement still resembles {other}'s reference "
+                            f"({sim:.2f}) — keeping the old one; won't look again for it.")
                     continue
                 _replace_reference(tvdb_id, code, new, repairs, conflicted_with=other)
                 replaced += 1
@@ -991,7 +999,7 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
         ctx.log(f"Reference repair: {e} — check Settings → OpenSubtitles.")
     finally:
         os_.close()
-        if replaced:
+        if replaced or touched:
             _save_repairs(tvdb_id, repairs)
     out["replaced"] = replaced
     return out

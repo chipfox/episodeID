@@ -18,6 +18,8 @@ import math
 import re
 from collections import Counter
 
+from . import textsim
+
 try:  # the same English stopwords every other vector view in this app uses
     from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
     _STOP = frozenset(ENGLISH_STOP_WORDS)
@@ -130,13 +132,7 @@ class Lexicon:
                        if len(_tokens(text)) >= MIN_CONFLICT_WORDS)
         if len(codes) < 2:
             return
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        vec = TfidfVectorizer(lowercase=True, strip_accents="unicode", sublinear_tf=True,
-                              stop_words="english",
-                              max_df=0.6 if len(codes) >= 10 else 1.0,
-                              token_pattern=r"(?u)\b[a-z][a-z']+\b")
-        matrix = vec.fit_transform([self._refs[code] for code in codes])
-        sims = (matrix @ matrix.T).toarray()
+        sims = textsim.pairwise([self._refs[code] for code in codes])
         stories = [set(self._story(code)) for code in codes]
         for i, a in enumerate(codes):
             for j in range(i + 1, len(codes)):
