@@ -497,3 +497,19 @@ survives cache reloads. Episodes with no usable subtitle are reported, never gue
 
 `media_text.py` adds Indonesian stopwords and broadens Portuguese so the `.en.srt` files that are
 actually Indonesian are detected by content, not filename.
+
+## Update 2026-11-07: story pairs and full-file escalation
+
+Repairing only unrelated near-duplicates left story pairs behind. Two parts of one story can be
+filed as the same transcript (X-Files `S09E01`/`S09E02` = 0.840, `S09E19`/`S09E20` = 0.695), and
+`repair_reference_conflicts` now considers them at a lower overlap (`STORY_PAIR_SIMILARITY` = 0.6)
+while keeping the ordinary 0.85 threshold for unrelated episodes. The repair still validates the
+replacements: OpenSubtitles also files those stories as one transcript, so the live run correctly
+*declined* to replace them and said so in the job log. Story pair membership never blocks a
+decision question — only a shared transcript under two unrelated numbers does.
+
+Full-file matching is reachable again from a sample review: `job_scan` honours
+`params["full"]`, which turns the fast path off for that job (the existing `only` filter limits it
+to the selected file, and the other files' plan rows are kept). The plan view renders a
+**Full-file match** button on sample review rows. Live check on `S09E01`: whole-file transcription
+also ends `NO_MATCH`, confirming the pair is unresolvable by text alone rather than by sampling.

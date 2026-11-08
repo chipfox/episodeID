@@ -654,6 +654,13 @@ def job_scan(ctx, params):
                 "confirm nor deny a filename — " +
                 ", ".join(f"{'/'.join(p['codes'])} ({p['similarity']:.2f})" for p in pairs[:6]) +
                 ("…" if len(pairs) > 6 else "") + ". 'Fetch references' looks for replacements.")
+    if lex and lex.story_pair_conflicts():
+        pairs = lex.story_pair_conflicts()
+        names = ", ".join("/".join(p["codes"]) + (" (%.2f)" % p["similarity"]) for p in pairs[:6])
+        ctx.log("Reference check: " + names +
+                " are parts of one story whose transcripts overlap - no amount of matching can "
+                "tell the parts apart from that alone; the filename decides until better "
+                "transcripts exist.")
     files = []
     for i, (v, rel, dlg, err) in enumerate(read):
         ctx.check_cancel()
@@ -684,15 +691,21 @@ def job_scan(ctx, params):
                 note = f"Sample of {dlg['duration'] / 60:.0f} min — suggested match needs review"
             else:
                 note = f"Sample of {dlg['duration'] / 60:.0f} min — weak sample evidence"
-        files.append({"rel": rel, "size": v.stat().st_size, "duration": dlg["duration"],
-                      "text_source": dlg["source"], "expected": expected,
-                      "scope": dlg.get("scope") or "full",
-                      "sample_start": dlg.get("sample_start"),
-                      "sample_end": dlg.get("sample_end"),
-                      "file_duration": dlg.get("file_duration"),
-                      "sample_text": adjudication.dialogue_text(dlg["cues"]) if sampled else "",
-                      "segments": res["segments"], "whole": res["whole"],
-                      "status": status, "note": note})
+        entry = {"rel": rel, "size": v.stat().st_size, "duration": dlg["duration"],
+                 "text_source": dlg["source"], "expected": expected,
+                 "scope": dlg.get("scope") or "full",
+                 "sample_start": dlg.get("sample_start"),
+                 "sample_end": dlg.get("sample_end"),
+                 "file_duration": dlg.get("file_duration"),
+                 "sample_text": adjudication.dialogue_text(dlg["cues"]) if sampled else "",
+                 "segments": res["segments"], "whole": res["whole"],
+                 "status": status, "note": note}
+        if (not sampled and lex is not None and len(expected) == 1
+                and status in ("NO_MATCH", "LOW_CONFIDENCE")):
+            pair = lex.story_pair_for(expected[0])
+            if pair:
+                entry["story_pair_overlap"] = {"with": pair[0], "similarity": pair[1]}
+        files.append(entry)
         det = " + ".join(f"{sg['code']}{'' if sg['confidence'] == 'high' else '?'}"
                          for sg in res["segments"]) or "-"
         ctx.log(f"{status:<16} {rel}  →  {det}")
