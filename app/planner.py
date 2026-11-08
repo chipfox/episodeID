@@ -624,9 +624,22 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 else:
                     reason = (f"Sample only ({where}) — {', '.join(suggested) or 'no candidate'} "
                               "is a suggestion, not proof of the whole file. Check it before renaming.")
+                ai = f.get("ai_code")
+                ai_pct = f"{float(f.get('ai_confidence') or 0):.0%}"
+                if ai and ai not in ("NO_MATCH", "LOW_CONFIDENCE"):
+                    reason += f" — AI suggests {ai} ({ai_pct}); it never renames by itself."
+                elif ai == "LOW_CONFIDENCE":
+                    reason += f" — the AI's best guess was too weak ({ai_pct}), so it was ignored."
+                elif ai == "NO_MATCH":
+                    reason += " — the AI found no candidate that fits."
+                elif f.get("reference_conflict"):
+                    reason += (f" — not asked: {'/'.join(f['reference_conflict'])} shares this "
+                               "episode's reference transcript.")
                 items.append({**base, "kind": "review", "sample": True,
                               "reason": reason,
-                              "suggested": suggested})
+                              "suggested": suggested,
+                              "ai": ({"code": ai, "confidence": f.get("ai_confidence")}
+                                     if ai else None)})
                 continue
 
         usable = [c for c in chosen if c[2] not in ("low", "provisional")]

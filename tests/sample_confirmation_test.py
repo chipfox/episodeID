@@ -34,7 +34,7 @@ def _window(code, score, *, start=0, end=600, votes=None, whole=None):
 
 def test_window_plan_reaches_later_parts_without_overrunning_file():
     starts = _sample_window_starts(2700, 0, 600, 5)
-    assert starts == [0, 1200, 600, 2400, 1800]
+    assert starts == [0, 1200, 600, 2100, 1800]  # 2400 clamps to 2100: the window must fit
     assert all(start + 600 <= 2700 for start in starts)
     assert len(starts) == len(set(starts))
     assert _sample_window_starts(450, 0, 600, 5) == [0]
@@ -91,4 +91,7 @@ def test_non_target_audio_is_reported_instead_of_guessed():
     assert "English references" in agg["note"]
 
 
+for _name, _fn in sorted(globals().copy().items()):
+    if _name.startswith("test_") and callable(_fn):
+        _fn()
 print("sample_confirmation_test: OK")

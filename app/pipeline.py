@@ -419,6 +419,9 @@ def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: di
     languages = sorted(language_counts, key=lambda code: -language_counts[code])
     all_windows_language = bool(languages) and sum(language_counts.values()) == len(windows)
     shared = ", ".join(sorted(conflict_codes))
+    # A window whose best whole score clears min_score but never the margin gate still
+    # heard recognisable episode dialogue — that is "too close to call", not "no dialogue".
+    weak_match = any(score >= float(settings["min_score"]) for score in whole_by_code.values())
 
     if not has_text:
         return {"status": "NO_TEXT", "code": None, "note": "No sample window produced dialogue",
@@ -435,9 +438,11 @@ def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: di
                             "cannot tell the two episodes apart",
                     "episode_like": True, "candidates": candidates, "whole": whole, "text": text}
         return {"status": "NO_MATCH", "code": None,
-                "note": ("No sample window contained episode-like dialogue" if not episode_like else
-                         "Sample windows agree on a story part, but not on one episode"),
-                "episode_like": episode_like or bool(story_codes), "candidates": candidates,
+                "note": ("Sample windows agree on a story part, but not on one episode" if story_codes else
+                         "Sample dialogue resembles several episodes, but no window favours one clearly"
+                         if (episode_like or weak_match) else
+                         "No sample window contained episode-like dialogue"),
+                "episode_like": episode_like or bool(story_codes) or weak_match, "candidates": candidates,
                 "whole": whole, "text": text}
     if expected_votes and not target_votes:
         if conflict_codes:
@@ -1498,7 +1503,10 @@ def _decision_pass(series, files, eps, ctx, lex=None):
     for n, f in enumerate(todo):
         ctx.check_cancel()
         ctx.progress(n / len(todo), f"Decision: {Path(f['rel']).name}")
-        adjudication.adjudicate(series, f, eps, ctx, lexicon=lex)
+        verdict = adjudication.adjudicate(series, f, eps, ctx, lexicon=lex)
+        if verdict is not None and ctx:
+            ctx.log(f"  decision: {Path(f['rel']).name} → {verdict.get('code') or 'unknown'} "
+                    f"({float(verdict.get('confidence') or 0):.0%})")
 
 
 def _llm_pass(series, files, eps, refs, ctx):
