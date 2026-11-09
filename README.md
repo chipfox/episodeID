@@ -122,7 +122,8 @@ Everything is editable in the web UI; any environment variable overrides the UI 
 |---|---|---|
 | `TVDB_API_KEY`, `TVDB_PIN` | | Required. PIN only for user-supported keys. |
 | `OPENSUBTITLES_API_KEY`, `_USERNAME`, `_PASSWORD` | | Downloads need an account. Free accounts have a small daily cap — fetches resume where they stopped. |
-| `SUBTITLE_LANGUAGE` | `en` | Reference language and embedded-track preference |
+| `MEDIA_LANGUAGE` | `en` | The one language: audio is transcribed in it, only subtitle tracks in it are read, and episode references are matched in it. Pick it in **Settings → Language**; leave the variable unset to keep the dropdown editable. Scenes in a second language are fine — a file is only reported as a language mismatch when the dialogue is *mostly* not in this language. Changing it re-transcribes files read in another language. |
+| `TVDB_LANGUAGE` | follows the language above | Advanced override for episode-title language, only needed for a language the dropdown does not list |
 | `SIDECAR_SUBTITLES` | `true` | Use `.srt`, `.ass`, `.ssa` and `.vtt` files beside videos as dialogue evidence. Set `false` when Bazarr or another tool manages sidecars separately; EpisodeID then uses embedded tracks or Whisper. |
 | `WHISPER_ENABLED` | `true` | Use the configured transcription backend when no usable text subtitles are available |
 | `WHISPER_BACKEND` | `local` | `local` = faster-whisper in the container; `openai` = remote OpenAI-compatible `/audio/transcriptions` endpoint |

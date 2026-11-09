@@ -1680,12 +1680,12 @@ function field(name, label, value, hint = "", type = "text", locked = false) {
 
 async function renderSettings() {
   refreshChips();
-  const { settings: s, locked } = await api("/api/settings");
+  const { settings: s, locked, languages = [] } = await api("/api/settings");
   const L = (k) => locked.includes(k);
   const f = (k, label, hint = "", type = "text") => field(k, label, s[k], hint, type, L(k));
   const cb = (k, label, hint = "") => `<div class="field"><label>${esc(label)}${L(k) ? ' <span class="locked">(set by env)</span>' : ""}</label>
     <input type="checkbox" name="${k}" ${s[k] ? "checked" : ""} ${L(k) ? "disabled" : ""}>${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
-  const sel = (k, label, opts, hint = "") => `<div class="field"><label>${esc(label)}</label>
+  const sel = (k, label, opts, hint = "") => `<div class="field"><label>${esc(label)}${L(k) ? ' <span class="locked">(set by env)</span>' : ""}</label>
     <select name="${k}" ${L(k) ? "disabled" : ""}>${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(s[k]) === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
     ${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
   const test = (svc) => `<div class="row" style="justify-content:flex-end"><span class="small muted" id="t-${svc}"></span>
@@ -1693,16 +1693,18 @@ async function renderSettings() {
 
   view.innerHTML = `<h1>Settings</h1><p class="muted">Values set through environment variables are shown as locked.</p>
   <form class="settings" id="settings">
+  <fieldset><legend>Language</legend>
+    ${sel("language", "Media language",
+      languages.some(([v]) => v === s.language) ? languages : [...languages, [s.language, s.language]], "The language your episodes are spoken in. Audio is transcribed in this language, only subtitle tracks in it are read, and episode references are matched in it. Scenes in a second language are fine — the language that dominates the episode is what counts. Changing it re-transcribes files that were read in another language.")}
+  </fieldset>
   <fieldset><legend>TVDB (required)</legend>
     ${f("tvdb_api_key", "API key", 'From <a href="https://thetvdb.com/api-information" target="_blank">thetvdb.com</a>. Episode numbers follow TVDB aired order, like Sonarr.', "password")}
     ${f("tvdb_pin", "Subscriber PIN", "Only needed for user-supported keys.", "password")}
-    ${f("tvdb_language", "Language", "Three-letter code for episode titles, e.g. eng.")}
     ${test("tvdb")}</fieldset>
   <fieldset><legend>OpenSubtitles (reference subtitles)</legend>
     ${f("opensubtitles_api_key", "API key", 'Create a consumer at <a href="https://www.opensubtitles.com/consumers" target="_blank">opensubtitles.com/consumers</a>.', "password")}
     ${f("opensubtitles_username", "Username", "An account is needed to download. Free accounts have a small daily download limit — downloads are cached, so large series fill in over a few days.")}
     ${f("opensubtitles_password", "Password", "", "password")}
-    ${f("subtitle_language", "Subtitle language", "Two-letter code, e.g. en. Also used to pick embedded subtitle tracks.")}
     ${cb("sidecar_subtitles", "Use external subtitle sidecars", "Reads .srt, .ass, .ssa and .vtt files beside videos as dialogue evidence. Turn this off when Bazarr or another tool manages those files separately; EpisodeID will use embedded tracks or Whisper instead.")}
     ${test("opensubtitles")}</fieldset>
   <fieldset><legend>Whisper / transcription (files without subtitles)</legend>
@@ -1715,7 +1717,6 @@ async function renderSettings() {
     ${f("whisper_api_key", "Remote API key", "Optional; sent as a Bearer token.", "password")}
     ${f("whisper_remote_model", "Remote model", "Passed as the model field, e.g. whisper-1, large-v3, nvidia/parakeet-tdt-0.6b-v3 or nvidia/canary-1b-v2.")}
     ${f("whisper_remote_timeout", "Remote timeout (s)", "Maximum time for one uploaded file; increase for long episodes or a busy remote GPU.", "number")}
-    ${f("whisper_language", "Spoken language", "e.g. en. Leave blank to auto-detect.")}
     ${test("whisper")}</fieldset>
   <fieldset><legend>Title cards</legend>
     <p class="muted small" style="margin-top:0">Reads the episode title shown on screen (OCR) as evidence independent of

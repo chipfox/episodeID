@@ -22,12 +22,15 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     # TVDB (required)
     "tvdb_api_key": ("", "TVDB_API_KEY", True),
     "tvdb_pin": ("", "TVDB_PIN", True),
-    "tvdb_language": ("eng", "TVDB_LANGUAGE", False),
     # OpenSubtitles
     "opensubtitles_api_key": ("", "OPENSUBTITLES_API_KEY", True),
     "opensubtitles_username": ("", "OPENSUBTITLES_USERNAME", False),
     "opensubtitles_password": ("", "OPENSUBTITLES_PASSWORD", True),
-    "subtitle_language": ("en", "SUBTITLE_LANGUAGE", False),
+    # One language for everything that reads a file: the language audio is
+    # transcribed in, the subtitle tracks worth reading, and the language the
+    # reference text is written in. Two separate knobs here let ASR answer in a
+    # language the references were not, so there is only this one.
+    "language": ("en", "MEDIA_LANGUAGE", False),
     "sidecar_subtitles": (True, "SIDECAR_SUBTITLES", False),
     # Transcription: local faster-whisper by default, or an OpenAI-compatible
     # audio transcription endpoint (which can host Whisper, Parakeet, Canary, ...).
@@ -36,7 +39,6 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "whisper_model": ("small", "WHISPER_MODEL", False),
     "whisper_device": ("auto", "WHISPER_DEVICE", False),
     "whisper_compute_type": ("default", "WHISPER_COMPUTE_TYPE", False),
-    "whisper_language": ("en", "WHISPER_LANGUAGE", False),
     "whisper_base_url": ("", "WHISPER_BASE_URL", False),
     "whisper_api_key": ("", "WHISPER_API_KEY", True),
     "whisper_remote_model": ("whisper-1", "WHISPER_REMOTE_MODEL", False),
@@ -106,6 +108,61 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
 
 _lock = threading.Lock()
 
+# Languages the app can honour. Media files tag audio and subtitle streams with
+# ISO 639-2 (either the terminological or the bibliographic code) while settings
+# use ISO 639-1, so both spellings live here together and the UI only offers what
+# stream selection can actually match. Codes checked against the ISO 639-2 list.
+LANGUAGES = {
+    "en": ("English", ("eng", "english")),
+    "es": ("Spanish", ("spa",)),
+    "fr": ("French", ("fra", "fre")),
+    "de": ("German", ("deu", "ger")),
+    "it": ("Italian", ("ita",)),
+    "pt": ("Portuguese", ("por",)),
+    "nl": ("Dutch", ("nld", "dut")),
+    "pl": ("Polish", ("pol",)),
+    "sv": ("Swedish", ("swe",)),
+    "da": ("Danish", ("dan",)),
+    "fi": ("Finnish", ("fin",)),
+    "no": ("Norwegian", ("nor",)),
+    "cs": ("Czech", ("ces", "cze")),
+    "hu": ("Hungarian", ("hun",)),
+    "ro": ("Romanian", ("ron", "rum")),
+    "el": ("Greek", ("ell", "gre")),
+    "ru": ("Russian", ("rus",)),
+    "uk": ("Ukrainian", ("ukr",)),
+    "tr": ("Turkish", ("tur",)),
+    "he": ("Hebrew", ("heb",)),
+    "id": ("Indonesian", ("ind",)),
+    "ja": ("Japanese", ("jpn",)),
+    "ko": ("Korean", ("kor",)),
+    "zh": ("Chinese", ("zho", "chi")),
+}
+
+
+def language_choices() -> list[tuple[str, str]]:
+    """Dropdown options: (code, name) in listing order."""
+    return [(code, name) for code, (name, _tags) in LANGUAGES.items()]
+
+
+def language_tags(code: str) -> set[str]:
+    """Every tag spelling that means this language, including the code itself."""
+    code = (code or "").strip().lower()
+    if not code:
+        return set()
+    _name, tags = LANGUAGES.get(code, ("", ()))
+    return {code} | {t.lower() for t in tags}
+
+
+def language_iso3(code: str) -> str:
+    """The ISO 639-2/T spelling — what TVDB and other metadata services expect.
+
+    Episode titles come back in this language and end up in suggested file names,
+    so metadata should not drift from the language the dialogue was matched in.
+    """
+    _name, tags = LANGUAGES.get((code or "").strip().lower(), ("", ()))
+    return tags[0] if tags else "eng"
+
 
 def _coerce(value, default):
     if isinstance(default, bool):
@@ -125,9 +182,27 @@ def _coerce(value, default):
     return "" if value is None else str(value)
 
 
+# Older builds asked for the subtitle language, the transcription language and the
+# metadata language separately. Those could disagree, and a transcript in a language
+# the references were not written in matches the wrong episode with full confidence.
+# An existing settings.json keeps whichever dialogue choice it recorded; the retired
+# keys are dropped so they cannot quietly override the one selector.
+_LEGACY_LANGUAGE = ("subtitle_language", "whisper_language")
+_RETIRED_KEYS = _LEGACY_LANGUAGE + ("tvdb_language",)
+
+
+def _fold_language(stored: dict) -> dict:
+    if "language" not in stored:
+        for key in _LEGACY_LANGUAGE:
+            if stored.get(key):
+                stored["language"] = stored[key]
+                break
+    return {k: v for k, v in stored.items() if k not in _RETIRED_KEYS}
+
+
 def _load_file() -> dict:
     try:
-        return json.loads(SETTINGS_FILE.read_text())
+        return _fold_language(json.loads(SETTINGS_FILE.read_text()))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -141,6 +216,11 @@ def get_settings() -> dict:
         if env in os.environ:
             val = os.environ[env]
         out[key] = _coerce(val, default)
+    # A blank language is not a choice, it is an accident: normalise it here, once,
+    # so no caller can forward it to the ASR server, where it means "guess for
+    # yourself" -- and a transcript in a language the references were not written
+    # in matches the wrong episode with full confidence.
+    out["language"] = (str(out["language"]).strip().lower() or SCHEMA["language"][0])
     return out
 
 

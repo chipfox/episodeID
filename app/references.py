@@ -320,7 +320,7 @@ class OpenSubtitles:
         self.api_key = s["opensubtitles_api_key"]
         self.username = s["opensubtitles_username"]
         self.password = s["opensubtitles_password"]
-        self.lang = s["subtitle_language"] or "en"
+        self.lang = s["language"]
         self.token = None
         # Searches always go to the main API. The server returned at login (vip-api… for
         # VIP accounts) is used for downloads only: it answers searches with

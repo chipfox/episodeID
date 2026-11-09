@@ -353,7 +353,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 5
+PLAN_VERSION = 6
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -618,7 +618,9 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 else:
                     where = f"first {float(end) / 60:.0f} min" if end else "a sample"
                 if f.get("language"):
-                    reason = f.get("note") or f"Audio appears to be {f['language']}; English references cannot identify it"
+                    reason = f.get("note") or (
+                        f"Audio appears to be {f['language']}, not {s['language']} "
+                        "— the episode references are not in this language")
                 elif not chosen and not candidate_codes:
                     reason = f.get("note") or f"Sample only ({where}) — no episode-like dialogue was found"
                 else:

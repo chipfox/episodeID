@@ -15,8 +15,8 @@ from pydantic import BaseModel
 from . import __version__, db, executor, jobs, llm, titlecard, tvdb
 from . import decision
 from . import integrity, pipeline, redownload  # noqa: F401  (registers job handlers)
-from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, public_settings,
-                     safe_media_path, save_settings)
+from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, language_choices,
+                     public_settings, safe_media_path, save_settings)
 from .references import (OpenSubtitles, _load_misses, clear_reference, ep_code, load_refs,
                          manual_dir)
 from .media_text import VIDEO_EXTS
@@ -117,7 +117,10 @@ def status():
 
 @app.get("/api/settings")
 def read_settings():
-    return {"settings": public_settings(), "locked": env_locked_keys()}
+    # The language list is served, not hardcoded in the page: the dropdown must
+    # never offer a language that stream selection cannot match.
+    return {"settings": public_settings(), "locked": env_locked_keys(),
+            "languages": language_choices()}
 
 
 @app.put("/api/settings")

@@ -2,11 +2,12 @@
 the same order Sonarr uses, so renamed files line up with Sonarr."""
 from __future__ import annotations
 
+import os
 import time
 
 import httpx
 
-from .config import get_settings
+from .config import get_settings, language_iso3
 
 BASE = "https://api4.thetvdb.com/v4"
 _token: dict = {"key": None, "token": None, "at": 0.0}
@@ -86,7 +87,9 @@ def series_info(tvdb_id: int) -> dict:
 
 def series_episodes(tvdb_id: int) -> list[dict]:
     """All episodes in default (aired) order, translated to the configured language."""
-    lang = get_settings()["tvdb_language"] or "eng"
+    # TVDB titles are metadata for the same language the dialogue is matched in;
+    # TVDB_LANGUAGE overrides it for languages the picker does not list.
+    lang = os.environ.get("TVDB_LANGUAGE") or language_iso3(get_settings()["language"])
     episodes: list[dict] = []
     page = 0
     with _client() as c:

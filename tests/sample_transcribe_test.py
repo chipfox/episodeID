@@ -14,7 +14,7 @@ os.environ.update(
     WHISPER_BACKEND="openai",
     WHISPER_BASE_URL="http://asr.example.test:8000/v1",
     WHISPER_REMOTE_MODEL="salm",
-    WHISPER_LANGUAGE="en",
+    MEDIA_LANGUAGE="en",
     WHISPER_REMOTE_TIMEOUT="17",
 )
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

@@ -298,7 +298,7 @@ def _window_from_existing(f: dict, settings: dict, reference_count: int) -> dict
         old = deduped.get(vote["code"])
         if old is None or float(vote.get("score") or 0) > float(old.get("score") or 0):
             deduped[vote["code"]] = vote
-    language = detect_language([text], settings["subtitle_language"]) if len(text.split()) >= 40 else None
+    language = detect_language([text], settings["language"]) if len(text.split()) >= 40 else None
     return {"start": float(f.get("sample_start") or 0),
             "end": float(f.get("sample_end") or 0), "source": f.get("text_source") or "none",
             "words": len(text.split()), "has_text": bool(text.strip()), "language": language,
@@ -312,7 +312,7 @@ def _scored_sample_window(video: Path, matcher: Matcher, start: float, duration:
     data = sample_dialogue(video, ctx, allow_whisper=True, start=start, duration=duration)
     cues = data.get("cues") or []
     text = adjudication.dialogue_text(cues, limit=20000)
-    language = detect_language(cues, settings["subtitle_language"]) if len(text.split()) >= 40 else None
+    language = detect_language(cues, settings["language"]) if len(text.split()) >= 40 else None
     if language:
         return {"start": float(data.get("sample_start", start)),
                 "end": float(data.get("sample_end", start + duration)),
@@ -704,7 +704,7 @@ def job_scan(ctx, params):
             entry["language"] = dlg["language"]
             entry["status"] = "NO_MATCH"
             entry["note"] = (f"The dialogue is {dlg['language']}, not "
-                             f"{s['subtitle_language']} — it cannot be matched "
+                             f"{s['language']} — it cannot be matched "
                              "against the references")
         if (not sampled and lex is not None and len(expected) == 1
                 and status in ("NO_MATCH", "LOW_CONFIDENCE")):
@@ -1557,7 +1557,7 @@ def _llm_file(series, f, eps, claimed, no_ref, ctx, force: bool = False):
     dlg = get_dialogue(Path(series["path"]) / f["rel"], ctx)
     if dlg.get("language"):
         ctx.log(f"  {f['rel']}: the dialogue is {dlg['language']}, not "
-                f"{get_settings()['subtitle_language']} — the episode summaries are in "
+                f"{get_settings()['language']} — the episode summaries are in "
                 "English, so the AI cannot judge this file")
         return True
     segs = f["segments"]

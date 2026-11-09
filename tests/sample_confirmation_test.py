@@ -11,7 +11,7 @@ from app.pipeline import (_aggregate_sample_evidence, _sample_window_starts,
 SETTINGS = {
     "min_score": 0.12,
     "min_margin": 0.04,
-    "subtitle_language": "en",
+    "language": "en",
 }
 
 

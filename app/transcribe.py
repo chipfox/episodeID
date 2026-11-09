@@ -244,7 +244,7 @@ def _remote_cues(payload, total: float, offset: float = 0.0) -> list[Cue]:
 def _remote_transcribe(video: Path, ctx=None, start: float = 0.0,
                        duration: float | None = None) -> list[Cue]:
     s = get_settings()
-    lang = s["whisper_language"] or ""
+    lang = s["language"]
     model = _transcription_model(s)
     if ctx:
         ctx.status(f"Remote transcription: {video.name}")
@@ -259,9 +259,7 @@ def _remote_transcribe(video: Path, ctx=None, start: float = 0.0,
     headers = {}
     if s["whisper_api_key"]:
         headers["Authorization"] = f"Bearer {s['whisper_api_key']}"
-    data = {"model": model, "response_format": "verbose_json"}
-    if lang:
-        data["language"] = lang
+    data = {"model": model, "response_format": "verbose_json", "language": lang}
     try:
         timeout = max(1, int(s["whisper_remote_timeout"]))
         response = httpx.post(
@@ -332,8 +330,8 @@ def transcribe(video: Path, ctx=None, start: float = 0.0,
     if _backend(s) == "openai":
         with _lock:
             return _remote_transcribe(video, ctx, start, duration)
-    lang = s["whisper_language"] or None
-    audio = decode_audio(video, lang or "", start, duration)
+    lang = s["language"]
+    audio = decode_audio(video, lang, start, duration)
     with _lock:
         try:
             return _run(_load(), audio, lang, video, ctx, offset=start)

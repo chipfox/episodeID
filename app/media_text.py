@@ -20,7 +20,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import CACHE_DIR, get_settings
+from .config import CACHE_DIR, get_settings, language_tags
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".webm", ".mpg"}
 SUB_EXTS = (".srt", ".ass", ".ssa", ".vtt")
@@ -210,12 +210,9 @@ def _lang_ok(stream: dict, lang: str, allow_untagged: bool = True) -> bool:
     tag = ((stream.get("tags") or {}).get("language") or "").lower()
     if not lang:
         return True
-    aliases = {"en": {"en", "eng", "english"}, "es": {"es", "spa"}, "fr": {"fr", "fre", "fra"},
-               "de": {"de", "ger", "deu"}, "it": {"it", "ita"}, "pt": {"pt", "por"},
-               "nl": {"nl", "dut", "nld"}, "ja": {"ja", "jpn"}}
     if tag in ("", "und"):
         return allow_untagged
-    return tag in aliases.get(lang, {lang})
+    return tag in language_tags(lang)
 
 
 # ---------------------------------------------------------------- extract
@@ -239,7 +236,7 @@ def _cache_key(path: Path, scope: str = "full", start: float = 0.0,
     backend = str(s["whisper_backend"]).strip().lower()
     key += (f"|sidecars:{int(bool(s['sidecar_subtitles']))}|transcriber:{backend}"
             f"|local-model:{s['whisper_model']}|remote-model:{s['whisper_remote_model']}"
-            f"|language:{s['whisper_language']}|remote-url:{s['whisper_base_url']}")
+            f"|language:{s['language']}|remote-url:{s['whisper_base_url']}")
     if scope != "full":
         key += f"|scope:{scope}|start:{float(start):.3f}|duration:{float(duration or 0):.3f}"
     return hashlib.sha1(key.encode()).hexdigest()
@@ -331,7 +328,7 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     """Returns {"source": str, "duration": float, "cues": [[start, end, text], ...]}.
     source is "none" when no text could be produced."""
     s = get_settings()
-    lang = s["subtitle_language"]
+    lang = s["language"]
     cache = _cache_file(video)
     data = _read_cached(cache, s["sidecar_subtitles"])
     if data is not None and "language" not in data:
@@ -378,10 +375,11 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
                 ctx.log(f"  the audio is {other}, not {lang} — dialogue kept, but flagged")
 
     if result is None:
-        data = {"source": "none", "duration": dur, "cues": []}
+        data = {"source": "none", "duration": dur, "requested_language": lang, "cues": []}
     else:
         cues, source = result
-        data = {"source": source, "duration": dur, "language": language,
+        data = {"source": source, "duration": dur, "requested_language": lang,
+                "language": language,
                 "cues": [[round(c.start, 2), round(c.end, 2), c.text] for c in cues]}
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(data))
@@ -439,9 +437,9 @@ def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
     if result is None:
         # With no ASR, only explicitly tagged English subtitles are acceptable
         # as a sample fallback. Untagged streams are often the wrong language.
-        result = extract_embedded(video, info, s["subtitle_language"], allow_untagged=False)
+        result = extract_embedded(video, info, s["language"], allow_untagged=False)
         if result is None and s["sidecar_subtitles"]:
-            sc = sidecar_subtitle(video, s["subtitle_language"])
+            sc = sidecar_subtitle(video, s["language"])
             if sc:
                 cues = parse_subtitle_text(read_text_file(sc), sc.suffix.lower())
                 if cues:
@@ -451,6 +449,7 @@ def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
 
     if result is None:
         data = {"source": "none", "duration": sample_len, "cues": [],
+                "requested_language": s["language"],
                 "scope": "sample" if partial else "full",
                 "sample_start": start, "sample_end": end, "file_duration": full}
         if fallback:
@@ -459,6 +458,7 @@ def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
         cues, source = result
         cues = _clip_cues(cues, start, end)
         data = {"source": source, "duration": sample_len,
+                "requested_language": s["language"],
                 "cues": [[round(c.start, 2), round(c.end, 2), c.text] for c in cues],
                 "scope": "sample" if partial else "full",
                 "sample_start": start, "sample_end": end, "file_duration": full}
