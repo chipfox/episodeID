@@ -40,7 +40,7 @@ class Cue:
 # The ASR backend is configured for one subtitle language. That is normally a
 # sufficient guard, but servers do not always report the language they heard.
 # A small function-word detector prevents foreign-language samples from being
-# scored against English references as if they were "no episode match".
+# scored against references in another language as if they were "no episode match".
 _LANG_STOPWORDS = {
     "en": {"the", "and", "you", "your", "i", "to", "of", "a", "an", "in", "that",
            "it", "is", "are", "was", "were", "for", "on", "with", "have", "has",

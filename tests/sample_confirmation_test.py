@@ -88,7 +88,7 @@ def test_non_target_audio_is_reported_instead_of_guessed():
     agg = _aggregate_sample_evidence(["S05E15"], windows, {}, SETTINGS, 2)
     assert agg["status"] == "NO_MATCH"
     assert agg["language"] == "es"
-    assert "English references" in agg["note"]
+    assert "not en" in agg["note"], agg["note"]  # names the chosen language, not "English"
 
 
 for _name, _fn in sorted(globals().copy().items()):

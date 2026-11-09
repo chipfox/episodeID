@@ -428,7 +428,8 @@ def _aggregate_sample_evidence(expected: list[str], windows: list[dict], eps: di
                 "episode_like": False, "candidates": candidates, "whole": whole, "text": ""}
     if all_windows_language and not expected_votes and not target_votes:
         return {"status": "NO_MATCH", "code": None, "language": languages[0],
-                "note": f"Audio appears to be {languages[0]}; English references cannot identify it",
+                "note": (f"Audio appears to be {languages[0]}, not {settings['language']} "
+                         "— the episode references are not in this language"),
                 "episode_like": False, "candidates": candidates, "whole": whole, "text": text}
     if not expected_votes and not target_votes:
         if conflict_codes:
@@ -1556,9 +1557,9 @@ def _llm_file(series, f, eps, claimed, no_ref, ctx, force: bool = False):
     False if the AI endpoint failed."""
     dlg = get_dialogue(Path(series["path"]) / f["rel"], ctx)
     if dlg.get("language"):
-        ctx.log(f"  {f['rel']}: the dialogue is {dlg['language']}, not "
-                f"{get_settings()['language']} — the episode summaries are in "
-                "English, so the AI cannot judge this file")
+        want = get_settings()["language"]
+        ctx.log(f"  {f['rel']}: the dialogue is {dlg['language']}, not {want} — the "
+                f"episode summaries are in {want}, so the AI cannot judge this file")
         return True
     segs = f["segments"]
     if not segs:

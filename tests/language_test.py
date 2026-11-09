@@ -122,4 +122,15 @@ for gone in ("whisper_language", "subtitle_language", "tvdb_language"):
 (CFG / "settings.json").write_text(json.dumps({"language": ""}))
 assert main.read_settings()["settings"]["language"] == "en"
 
+# No user-facing string may name a language the setting does not. Two of these
+# notes used to say "English references" unconditionally, which is precisely the
+# wrong-language report this change exists to prevent.
+offenders = []
+for src in sorted(Path(__file__).resolve().parents[1].glob("app/*.py")):
+    for n, line in enumerate(src.read_text().splitlines(), 1):
+        code = line.split("#", 1)[0]
+        if "English" in code and '"en"' not in code:
+            offenders.append(f"{src.name}:{n}: {line.strip()}")
+assert not offenders, offenders
+
 print("language_test: OK")
