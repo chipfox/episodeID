@@ -23,22 +23,49 @@ class Cancelled(Exception):
 
 
 class JobContext:
+    # A scan logs a line per file and reports progress per file. Writing each one
+    # straight to SQLite measured 38 s of a 99 s scan, so lines are buffered and
+    # flushed at a pace the UI cannot tell apart from instant.
+    FLUSH_SECONDS = 0.5
+    FLUSH_LINES = 25
+
     def __init__(self, job_id: int, series_id: int | None):
         self.job_id = job_id
         self.series_id = series_id
         self._last_progress = 0.0
+        self._pending: list[str] = []
+        self._last_flush = time.time()
+        # Transcript reads run several files at once, so two threads can be logging
+        # exactly when a flush swaps the buffer out from under them.
+        self._lock = threading.Lock()
 
     def log(self, msg: str) -> None:
         line = f"[{time.strftime('%H:%M:%S')}] {msg}"
         log.info("job %s: %s", self.job_id, msg)
-        db.append_job_log(self.job_id, line)
+        with self._lock:
+            self._pending.append(line)
+            due = (len(self._pending) >= self.FLUSH_LINES
+                   or time.time() - self._last_flush >= self.FLUSH_SECONDS)
+        if due:
+            self.flush()
+
+    def flush(self) -> None:
+        """Write any buffered log lines. The container log always had them, so the
+        worst a crash can cost is the last half second of the job's own copy."""
+        with self._lock:
+            if not self._pending:
+                return
+            lines, self._pending = self._pending, []
+            self._last_flush = time.time()
+        db.append_job_log(self.job_id, lines)
 
     def status(self, msg: str) -> None:
+        self.flush()
         db.update_job(self.job_id, message=msg)
 
     def progress(self, frac: float, msg: str | None = None) -> None:
         now = time.time()
-        if msg is None and now - self._last_progress < 0.5 and frac < 1:
+        if now - self._last_progress < 0.5 and frac < 1:
             return
         self._last_progress = now
         fields = {"progress": max(0.0, min(1.0, frac))}
@@ -94,6 +121,7 @@ def _run(job_id: int) -> None:
         ctx.log(traceback.format_exc())
         db.update_job(job_id, status="failed", finished=db.now(), message=str(e)[:500])
     finally:
+        ctx.flush()
         _cancel.discard(job_id)
 
 

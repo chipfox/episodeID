@@ -132,9 +132,28 @@ def _ts(s: str) -> float:
     return int(h) * 3600 + int(mi) * 60 + int(se) + int(ms.ljust(3, "0")) / 1000
 
 
+# Fansub watermarks: the group's credit and site, pasted into the subtitle stream.
+# Checked against this library's own references: "Synch and correct by MemoryOnSmells
+# www.addic7ed.com" appears in a dozen season-9 transcripts. Two texts carrying the
+# same group's signature score each other higher for reasons that have nothing to do
+# with the episode, which is exactly the confusion those files already have.
+# Precision matters more than recall here: "Owww. Burger World" and "murdered by a
+# party favor" are dialogue and must survive, so a bare "www." or " by " is not enough.
+# The accepted cost is a URL that is genuinely on screen in an episode (Quantamie's site
+# in Schizogeny) — a couple of words of unique signal, against a watermark that is shared
+# by every transcript the same group touched.
+_CREDIT = re.compile(
+    r"(?:sub-?titles?|subs?|sync(?:h)?(?:\s*(?:&|and)\s*correct(?:ed)?)?"
+    r"|translat(?:ed|ion)|typeset|proofread|adapted)\s*(?:&|and)?\s*"
+    r"(?:correct(?:ed)?\s*)?by\s+[\w@.\-+]{1,32}", re.I)
+_URL = re.compile(r"(?<![\w.])www\.[\w-]+(?:\.[\w-]+)+\S*|https?://\S+", re.I)
+
+
 def _clean(text: str) -> str:
     text = html.unescape(_TAGS.sub(" ", text))
     text = text.replace("\\N", " ").replace("\\n", " ")
+    text = _URL.sub(" ", text)
+    text = _CREDIT.sub(" ", text)
     text = re.sub(r"\[[^\]]*\]|\([^)]*\)|♪", " ", text)  # sound cues, lyrics marks
     return re.sub(r"\s+", " ", text).strip()
 

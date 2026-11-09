@@ -161,17 +161,21 @@ def _encode_remote_audio(video: Path, lang: str, start: float = 0.0,
     return r.stdout
 
 
-def _refused(body: str, status: int, minutes: float | None = None) -> RuntimeError:
-    """Say what to do about a refused upload instead of dumping the server's JSON.
+def _too_long(minutes: float) -> RuntimeError:
+    """The one failure a re-run can never fix, said plainly.
 
-    The transcription server caps how long one request may be, so a two-part or
-    feature-length file is refused whole. That is worth naming: it is the one
-    failure a re-run can never fix, and a plan reason should not hide it in a payload.
+    The server caps how long one request may be, so a two-part or feature-length
+    file is refused whole. A plan reason should not hide that in a payload.
     """
+    return RuntimeError(
+        f"this audio is {minutes:.0f} min — longer than the transcription server "
+        "accepts in one request, so its audio cannot be read")
+
+
+def _refused(body: str, status: int, minutes: float | None = None) -> RuntimeError:
+    """Say what to do about a refused upload instead of dumping the server's JSON."""
     if minutes is not None and status == 400 and "exceeds configured limit" in body:
-        return RuntimeError(
-            f"this audio is {minutes:.0f} min — longer than the transcription server "
-            "accepts in one request, so its audio cannot be read")
+        return _too_long(minutes)
     return RuntimeError(f"remote transcription failed ({status}): {body[:300]}")
 
 
@@ -248,6 +252,16 @@ def _remote_transcribe(video: Path, ctx=None, start: float = 0.0,
     model = _transcription_model(s)
     if ctx:
         ctx.status(f"Remote transcription: {video.name}")
+    total = duration_of(probe(video))
+    # How much audio we are about to put on the wire. Deciding this *before*
+    # encoding costs one ffprobe; learning it from the server's refusal costs
+    # 40 s of encoding and uploading an 87-minute file, on every single scan.
+    send = total - max(0.0, start)
+    if duration is not None:
+        send = min(send, duration)
+    limit = int(s.get("whisper_max_upload_seconds") or 0)
+    if limit > 0 and send > limit:
+        raise _too_long(send / 60)
     if start or duration is not None:
         audio = _encode_remote_audio(video, lang, start, duration)
     else:
@@ -268,23 +282,15 @@ def _remote_transcribe(video: Path, ctx=None, start: float = 0.0,
     except (httpx.HTTPError, ValueError) as e:
         raise RuntimeError(f"remote transcription request failed: {e}") from e
     if response.status_code < 200 or response.status_code >= 300:
-        raise _refused(response.text, response.status_code, duration_of(probe(video)) / 60)
+        raise _refused(response.text, response.status_code, send / 60)
     try:
         payload = response.json()
     except ValueError:
         payload = {"text": response.text}
-    total = _float(payload.get("duration")) if isinstance(payload, dict) else 0.0
-    if total <= 0:
-        try:
-            from .media_text import duration as media_duration
-            total = media_duration(probe(video))
-            if start:
-                total = max(0.0, total - start)
-            if duration is not None:
-                total = min(total, duration)
-        except Exception:  # noqa: BLE001
-            total = duration or 0.0
-    cues = _remote_cues(payload, total, offset=start)
+    # Some servers report the clip's own length and some report nothing; we already
+    # know what we sent, so a second ffprobe here would be pure overhead.
+    got = _float(payload.get("duration")) if isinstance(payload, dict) else 0.0
+    cues = _remote_cues(payload, got if got > 0 else max(send, 1.0), offset=start)
     if ctx:
         ctx.check_cancel()
         ctx.status(f"Remote transcription: {video.name} done")

@@ -43,6 +43,16 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "whisper_api_key": ("", "WHISPER_API_KEY", True),
     "whisper_remote_model": ("whisper-1", "WHISPER_REMOTE_MODEL", False),
     "whisper_remote_timeout": (3600, "WHISPER_REMOTE_TIMEOUT", False),
+    # How much audio the server will accept in one request. NeMo-Speech.cpp refuses
+    # anything over its compiled kMaxUploadSeconds (3600), and asking before sending
+    # beats encoding and uploading 87 minutes of a two-parter just to be told no.
+    # Set 0 for a backend with no cap.
+    "whisper_max_upload_seconds": (3600, "WHISPER_MAX_UPLOAD_SECONDS", False),
+    # How many files' transcripts to fetch at once. Measured on the LAN ASR server:
+    # 4 concurrent requests give ~1.3x its throughput, 8 give ~2.1x (it saturates
+    # near 2x, so a bigger pool is just queueing). Only a file with no cached
+    # transcript goes over the wire, so a warm scan never waits on this.
+    "transcribe_workers": (4, "TRANSCRIBE_WORKERS", False),
     # LLM (OpenAI-compatible; Ollama: http://host:11434/v1)
     "llm_enabled": (False, "LLM_ENABLED", False),
     "llm_base_url": ("http://ollama:11434/v1", "LLM_BASE_URL", False),

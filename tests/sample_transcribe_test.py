@@ -1,4 +1,5 @@
 """Remote ASR sample windows keep file-relative cue times."""
+import json
 import os
 import shutil
 import sys
@@ -104,3 +105,38 @@ try:
     raise AssertionError("a server error must raise")
 except RuntimeError as e:
     assert "model load failed" in str(e), e
+
+# A file the server is going to refuse must be refused *before* it is encoded and
+# uploaded. The 87-minute two-parter cost 40 s of shipping audio on every scan to
+# learn something ffprobe had already told us.
+calls.clear()
+transcribe.probe = lambda _video: {"format": {"duration": "5220"}, "streams": []}
+try:
+    transcribe.transcribe(video)
+    raise AssertionError("an over-long file must be refused without uploading")
+except RuntimeError as e:
+    assert "87 min" in str(e) and "{" not in str(e), e
+assert calls == [], f"nothing may be encoded or posted: {calls}"
+
+# A sample window out of that same file is still fine: the request has to fit the
+# server's limit, not the file.
+transcribe.httpx.post = fake_post
+window = transcribe.transcribe(video, start=0, duration=600)
+assert window and calls[-1][0] == "post", calls
+
+# A backend with no cap (WHISPER_MAX_UPLOAD_SECONDS=0) must not be second-guessed:
+# the file goes up and the server's own refusal is what we report.
+(W / "config" / "settings.json").parent.mkdir(parents=True, exist_ok=True)
+(W / "config" / "settings.json").write_text(json.dumps({"whisper_max_upload_seconds": 0}))
+def refused_post(*args, **kwargs):
+    calls.append(("post",))
+    return TooLong()
+
+
+transcribe.httpx.post = refused_post
+calls.clear()
+try:
+    transcribe.transcribe(video)
+    raise AssertionError("an uncapped backend should have been asked")
+except RuntimeError as e:
+    assert "87 min" in str(e) and calls[-1][0] == "post", (e, calls[-1])

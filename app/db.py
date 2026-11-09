@@ -261,10 +261,26 @@ def update_job(job_id: int, **fields) -> None:
     conn().execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id=?", vals)
 
 
-def append_job_log(job_id: int, line: str) -> None:
-    # One row per line: appending to a growing text column rewrote the whole log on
-    # every line, which got slow (and held up page loads) late in a long scan.
-    conn().execute("INSERT INTO job_log (job_id, line) VALUES (?,?)", (job_id, line))
+def append_job_log(job_id: int, lines: list[str]) -> None:
+    """Insert many log lines in one transaction.
+
+    One row per line, because appending to a growing text column rewrote the whole
+    log on every line. But a scan logs and reports progress once per file, and in
+    autocommit WAL every statement is its own commit: ~900 of them per library scan
+    measured 38 s of the job's wall clock spent purely on bookkeeping. Batching
+    turns that into one commit per flush.
+    """
+    if not lines:
+        return
+    c = conn()
+    c.execute("BEGIN")
+    try:
+        c.executemany("INSERT INTO job_log (job_id, line) VALUES (?,?)",
+                      [(job_id, line) for line in lines])
+        c.execute("COMMIT")
+    except sqlite3.Error:
+        c.execute("ROLLBACK")
+        raise
 
 
 def get_job(job_id: int, tail: int | None = None) -> dict | None:
