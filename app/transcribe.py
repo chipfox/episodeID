@@ -334,8 +334,11 @@ def transcribe(video: Path, ctx=None, start: float = 0.0,
     s = get_settings()
     global _gpu_error, _model
     if _backend(s) == "openai":
-        with _lock:
-            return _remote_transcribe(video, ctx, start, duration)
+        # No lock here: the model globals below belong to the local backend, and the
+        # remote call keeps no shared state. Holding the model lock around it
+        # serialised every transcript in the app and made the read pool a no-op —
+        # 8 cold files measured 151 s at one worker and 147 s at four.
+        return _remote_transcribe(video, ctx, start, duration)
     lang = s["language"]
     audio = decode_audio(video, lang, start, duration)
     with _lock:
