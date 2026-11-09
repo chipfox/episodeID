@@ -104,6 +104,13 @@ def detect_language(cues: list | list[list], target_language: str = "en") -> str
     target = _language_key(target_language)
     if not scores:
         return None
+    if target not in _LANG_STOPWORDS:
+        # We have no stopword list for the chosen language, so it can never appear
+        # in `scores` and the margin below would compare against 0.0 — which would
+        # report every file as foreign and turn a whole non-English library into
+        # review rows. Not knowing what the language looks like is a reason to say
+        # nothing, not a reason to blame whichever language scored highest.
+        return None
     best_lang, best = max(scores.items(), key=lambda item: item[1])
     target_score = scores.get(target, 0.0)
     if best_lang == target or best < 0.045 or best < target_score * 1.75:
@@ -375,11 +382,10 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
                 ctx.log(f"  the audio is {other}, not {lang} — dialogue kept, but flagged")
 
     if result is None:
-        data = {"source": "none", "duration": dur, "requested_language": lang, "cues": []}
+        data = {"source": "none", "duration": dur, "cues": []}
     else:
         cues, source = result
-        data = {"source": source, "duration": dur, "requested_language": lang,
-                "language": language,
+        data = {"source": source, "duration": dur, "language": language,
                 "cues": [[round(c.start, 2), round(c.end, 2), c.text] for c in cues]}
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(data))
@@ -449,7 +455,6 @@ def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
 
     if result is None:
         data = {"source": "none", "duration": sample_len, "cues": [],
-                "requested_language": s["language"],
                 "scope": "sample" if partial else "full",
                 "sample_start": start, "sample_end": end, "file_duration": full}
         if fallback:
@@ -458,7 +463,6 @@ def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
         cues, source = result
         cues = _clip_cues(cues, start, end)
         data = {"source": source, "duration": sample_len,
-                "requested_language": s["language"],
                 "cues": [[round(c.start, 2), round(c.end, 2), c.text] for c in cues],
                 "scope": "sample" if partial else "full",
                 "sample_start": start, "sample_end": end, "file_duration": full}

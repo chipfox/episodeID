@@ -26,7 +26,7 @@ for gone in ("LANGUAGE", "MEDIA_LANGUAGE", "WHISPER_LANGUAGE", "SUBTITLE_LANGUAG
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import config, transcribe  # noqa: E402
-from app.media_text import detect_language  # noqa: E402
+from app.media_text import _LANG_STOPWORDS, detect_language  # noqa: E402
 
 CFG = Path(os.environ["CONFIG_DIR"])
 CFG.mkdir(parents=True, exist_ok=True)
@@ -108,6 +108,15 @@ es = "la verdad esta ahi afuera y tenemos que hablar del expediente esta noche"
 assert detect_language([en] * 9 + [es], "en") is None
 assert detect_language([es] * 9 + [en], "en") == "es"
 assert detect_language(["short line"], "en") is None
+
+# A language the detector has no stopword list for must never report a foreign
+# language: with nothing to compare against, the margin test would compare against
+# zero and flag every file in the library as the wrong language.
+assert detect_language([es] * 9 + [en], "nl") is None
+assert detect_language([es] * 9 + [en], "ru") is None
+# The two language tables must not drift: anything the detector scores has to be
+# a language the app recognises, or its code would never reach detection at all.
+assert set(_LANG_STOPWORDS) <= {code for code, _ in choices}, set(_LANG_STOPWORDS) - {c for c, _ in choices}
 
 # The UI is served the same list rather than keeping its own copy, and sees the
 # same effective language the backend uses.

@@ -110,7 +110,7 @@ def _pick_audio_stream(video: Path, lang: str) -> str:
     def rank(s):
         title = ((s.get("tags") or {}).get("title") or "").lower()
         disp = s.get("disposition") or {}
-        return (_lang_ok(s, lang) if lang else True,
+        return (_lang_ok(s, lang),
                 "commentary" not in title and not disp.get("comment"),
                 bool(disp.get("default")), -s["index"])
 
