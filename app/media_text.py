@@ -319,18 +319,6 @@ def cached_dialogue(video: Path) -> dict | None:
     return _read_cached(_cache_file(video), get_settings()["sidecar_subtitles"])
 
 
-def dialogue_in_target_language(cues: list, lang: str) -> tuple[bool, str | None]:
-    """Is this text in the language the references are written in?
-
-    Embedded and sidecar subtitles are often untagged and sometimes belong to a
-    different language — or to a different episode — so they must be checked
-    before anyone treats them as this file's dialogue. Returns (False, lang)
-    only when detect_language is certain; anything ambiguous stays usable.
-    """
-    other = detect_language(cues, lang)
-    return other is None, other
-
-
 def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     """Returns {"source": str, "duration": float, "cues": [[start, end, text], ...]}.
     source is "none" when no text could be produced."""
@@ -339,11 +327,14 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     cache = _cache_file(video)
     data = _read_cached(cache, s["sidecar_subtitles"])
     if data is not None and "language" not in data:
-        usable, other = dialogue_in_target_language(data["cues"], lang)
-        if not usable and data["source"].startswith(("embedded ", "sidecar ")):
-            data = None  # an untagged foreign subtitle track cached before this check
+        # Embedded and sidecar subtitles are often untagged and sometimes belong to
+        # another language — or another episode — so cached text is only trusted once
+        # it has been checked against the chosen language.
+        other = detect_language(data["cues"], lang)
+        if other and data["source"].startswith(("embedded ", "sidecar ")):
+            data = None  # foreign subtitle text cached before this check existed
         else:
-            data["language"] = None if usable else other
+            data["language"] = other
     if data is not None and (data["source"] != "none" or not allow_whisper or not s["whisper_enabled"]):
         return data
 
@@ -360,8 +351,8 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     if result is None:
         result = extract_embedded(video, info, lang)
     if result is not None:
-        usable, other = dialogue_in_target_language(result[0], lang)
-        if not usable:
+        other = detect_language(result[0], lang)
+        if other:
             if ctx:
                 ctx.log(f"  {result[1]} is {other}, not {lang} — reading the audio instead")
             result = None
@@ -373,13 +364,10 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
         if cues:
             result = (cues, tr.source_label(s))
 
-    language = None
-    if result is not None:
-        usable, other = dialogue_in_target_language(result[0], lang)
-        if not usable:
-            language = other
-            if ctx:
-                ctx.log(f"  the audio is {other}, not {lang} — dialogue kept, but flagged")
+    # Text we cannot place is kept: it is still the only evidence this file has.
+    language = detect_language(result[0], lang) if result is not None else None
+    if language and ctx:
+        ctx.log(f"  the audio is {language}, not {lang} — dialogue kept, but flagged")
 
     if result is None:
         data = {"source": "none", "duration": dur, "cues": []}

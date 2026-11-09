@@ -4,12 +4,27 @@ The X-Files S05 repack ships an untagged Indonesian subrip track inside files
 whose audio is English. get_dialogue() preferred the track, so the AI was asked
 about the wrong episode's text and answered 99% for the episode in the filename.
 """
+import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
+W = Path(os.environ.get("EPID_TEST_DIR", "/tmp/epid_dialogue_language"))
+if W.exists():
+    shutil.rmtree(W)
+os.environ.update(
+    MEDIA_ROOT=str(W / "media"),
+    CONFIG_DIR=str(W / "config"),
+    CACHE_DIR=str(W / "cache"),
+    SIDECAR_SUBTITLES="false",   # Bazarr-managed sidecars are not evidence
+    WHISPER_ENABLED="false",     # so a rejected track has to end up as "none"
+)
+for gone in ("LANGUAGE", "MEDIA_LANGUAGE"):
+    os.environ.pop(gone, None)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.media_text import dialogue_in_target_language  # noqa: E402
+from app import media_text  # noqa: E402
 
 INDONESIAN = (
     "Ayo terus. Lanjutkan. Jangan berhenti. Dorong terus. Tiada hasil tanpa usaha. "
@@ -29,24 +44,55 @@ ENGLISH = (
     "I would like to personally examine his injuries. There is nothing you can do about it now."
 )
 
-
-def test_indonesian_track_is_rejected():
-    usable, other = dialogue_in_target_language([[0.0, 3.0, INDONESIAN]], "en")
-    assert usable is False, "an Indonesian track must not pass as English dialogue"
-    assert other == "id", other
-
-
-def test_english_track_is_usable():
-    usable, other = dialogue_in_target_language([[0.0, 3.0, ENGLISH]], "en")
-    assert usable is True, f"English dialogue was rejected as {other}"
-    assert other is None
+# The track picker is not involved here: the dialogue is already cached, which is
+# how the pack's tracks reached the AI in the first place.
+media_text.probe = lambda _v: {"format": {"duration": "2700"}, "streams": []}
+media_text.extract_embedded = lambda *_a, **_k: None
 
 
-def test_short_text_stays_usable():
+def cached(video: Path, text: str, source: str) -> Path:
+    """Write a cache entry the way a build from before this check would have left
+    it: no `language` key, which is exactly what makes get_dialogue re-check it."""
+    path = media_text._cache_file(video)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"source": source, "duration": 2700.0,
+                                "cues": [[0.0, 3.0, text]] * 8}))
+    return path
+
+
+def video_named(name: str) -> Path:
+    v = W / "media" / "Season 05" / f"{name}.mkv"
+    v.parent.mkdir(parents=True, exist_ok=True)
+    v.write_bytes(b"not a real video")
+    return v
+
+
+def test_indonesian_text_is_not_the_english_dialogue():
+    assert media_text.detect_language([[0.0, 3.0, INDONESIAN]], "en") == "id"
+
+
+def test_english_text_is_the_english_dialogue():
+    assert media_text.detect_language([[0.0, 3.0, ENGLISH]], "en") is None
+
+
+def test_short_text_is_never_called_foreign():
     # Too little evidence to be sure: never discard the only text a file has.
-    usable, other = dialogue_in_target_language([[0.0, 3.0, "Ayo terus. Lanjutkan."]], "en")
-    assert usable is True
-    assert other is None
+    assert media_text.detect_language([[0.0, 3.0, "Ayo terus. Lanjutkan."]], "en") is None
+
+
+def test_cached_foreign_track_is_dropped():
+    video = video_named("poisoned")
+    cached(video, INDONESIAN, "embedded #3")
+    dlg = media_text.get_dialogue(video, allow_whisper=False)
+    assert dlg["source"] == "none", f"foreign subtitle text was used as dialogue: {dlg['source']}"
+
+
+def test_cached_target_language_track_is_kept():
+    video = video_named("english")
+    cached(video, ENGLISH, "embedded #3")
+    dlg = media_text.get_dialogue(video, allow_whisper=False)
+    assert dlg["source"] == "embedded #3", dlg
+    assert dlg["language"] is None, dlg
 
 
 if __name__ == "__main__":
