@@ -22,6 +22,7 @@ import os
 from .config import MEDIA_ROOT, get_settings
 from .media_text import SUB_EXTS, VIDEO_EXTS
 from .references import describe_conflict, ref_meta
+from . import textsim
 
 META_EXTS = {".nfo", ".jpg", ".jpeg", ".png", ".tbn", ".xml"}
 QUALITY_RE = re.compile(
@@ -353,7 +354,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 12
+PLAN_VERSION = 13
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -571,6 +572,34 @@ def _parts_complete(f: dict, eps: dict) -> bool:
     return covered >= 0.5 * duration
 
 
+def _own_text(f: dict | None) -> str:
+    """A file's dialogue, when it came from the file itself and is long enough to compare.
+
+    Sidecars are third-party files and may describe a different release; they cannot
+    tell two files apart.
+    """
+    if not f:
+        return ""
+    text = str(f.get("sample_text") or "")
+    if not str(f.get("text_source") or "").startswith(("remote ", "embedded ")):
+        return ""
+    return text if len(text.split()) >= 60 else ""
+
+
+def _same_code_relation(a: dict, b: dict | None) -> str:
+    """How two files that both match one episode relate: 'duplicate', 'split', 'unknown'.
+
+    Two encodes of one episode carry the same dialogue. The two halves of an episode
+    that was split across files carry different dialogue that both sit inside the
+    same reference. Overlap tells them apart; missing text cannot.
+    """
+    ta, tb = _own_text(a), _own_text(b)
+    if not ta or not tb:
+        return "unknown"
+    shared = textsim.overlap(textsim.bigrams(ta), textsim.bigrams(tb))
+    return "split" if shared < 0.35 else "duplicate"
+
+
 def build_plan(series: dict, scan: dict) -> list[dict]:
     s = get_settings()
     root = Path(series["path"])
@@ -580,6 +609,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     series_name = (series.get("options") or {}).get("name_in_files") or root.name
 
     files = scan["files"]
+    files_by_rel = {f["rel"]: f for f in files}
     items: list[dict] = []
     overrides = (series.get("options") or {}).get("overrides") or {}
 
@@ -609,8 +639,10 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         for seg in f.get("segments") or []:
             code, strength, ai = _segment_choice(seg)
             if code:
-                if strength == "low" and parts:
-                    strength = "parts"
+                # A structurally proved multi-part file outranks an AI annotation:
+                # the geometry covers every part, the annotation is one guess.
+                if parts and strength in ("low", "ai") and seg.get("code"):
+                    code, strength, ai = seg["code"], "parts", False
                 chosen.append((seg, code, strength, ai))
         decided[f["rel"]] = chosen
 
@@ -742,6 +774,26 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         manual = any(c[2] == "manual" for c in usable)
 
         if len(lost) == len(usable):
+            # Another file claims the same episode(s). Before calling this one a
+            # duplicate, compare the dialogue: two encode copies share their text,
+            # the two halves of a split release do not. Moving a real half into the
+            # duplicates folder is data loss, so unknown text is a review, not a move.
+            rivals = {winner[c[1]][0] for c in usable}
+            rival = files_by_rel.get(next(iter(rivals))) if len(rivals) == 1 else None
+            relation = _same_code_relation(f, rival)
+            if relation == "split":
+                items.append({**base, "kind": "ok", "decided_by": "split files",
+                              "reason": f"Correct — {', '.join(codes)} is in two files with "
+                                        "different dialogue (one episode split across files); "
+                                        "both kept"})
+                continue
+            if relation == "unknown":
+                items.append({**base, "kind": "review",
+                              "reason": f"Another file also matches {', '.join(codes)} and the "
+                                        "two dialogues could not be compared — check whether this "
+                                        "is one episode split across files before removing either",
+                              "suggested": codes})
+                continue
             items.append({**base, "kind": "aside", "bucket": "duplicates",
                           "reason": f"Duplicate of {', '.join(codes)} (a better match exists)",
                           "targets": [{"path": f"{backup}/duplicates/{rel}"}],

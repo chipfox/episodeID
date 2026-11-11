@@ -16,7 +16,7 @@ Changelog; release image tags identify their source commit.
   release, so a sidecar must never be able to turn a multi-part file into an
   automatic OK. Verified rows carry the `parts` evidence strength and
   `decided_by: "parts"`; a file named for one part while covering three is renamed
-  to the combined name instead of going to review. `PLAN_VERSION` is 12, and
+  to the combined name instead of going to review. `PLAN_VERSION` is 13, and
   `tools/golden_check.py` judges a `parts` row by its segments rather than treating
   its low score as a deferral. A parts row keeps its real `LOW_CONFIDENCE` status but
   its note says why the score stays low, so the badge and the reason agree.
@@ -44,6 +44,16 @@ Changelog; release image tags identify their source commit.
   from 1,336 to 1,178 lines.
 
 ### Fixed
+- **A split release is not a duplicate.** Two files can both match S01E01 because the
+  episode was released as two halves. The planner used to see the weaker file as a
+  duplicate and pre-select moving it to `backup/duplicates`. It now compares the two
+  files' own dialogue with `textsim.overlap`: identical text is a duplicate, different
+  text is a split release and both files stay, and missing or sidecar text is a
+  review — never an automatic move. The kept half is labelled `split files`.
+- **An AI annotation no longer displaces proved parts.** On a multi-part file whose
+  segments are low because their references overlap, a 9B segment annotation used to
+  replace the structural evidence and push the row back to review. Structural parts
+  now win; the annotation remains a hint on other rows.
 - **S09E02's reference was the other half's subtitle.** The cached OpenSubtitles
   record (id 1836471) is named for S09E02 but its text is part 1's dialogue: 0.89
   bigram containment with the S09E01 file, 0.17 with its own. The pair therefore

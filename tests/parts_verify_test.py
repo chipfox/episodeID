@@ -77,4 +77,11 @@ jump = scan_file("Show - S01E01E03 - Jump.mkv", ["S01E01", "S01E03"],
                  [seg(0, 2400, "S01E01"), seg(2400, 4200, "S01E03")])
 assert row(jump)["kind"] == "review", row(jump)
 
-print("parts_verify_test: OK — 6 cases")
+# An AI annotation on a low segment cannot displace the structural proof.
+ai = scan_file("Show - S01E01E02 - AI.mkv", ["S01E01", "S01E02"],
+               [dict(TWO[0], llm={"code": "S01E01", "confidence": .9}),
+                dict(TWO[1], llm={"code": "S01E01", "confidence": .9})])
+r = row(ai)
+assert r["kind"] == "ok" and r["decided_by"] == "parts", r
+
+print("parts_verify_test: OK — 7 cases")
