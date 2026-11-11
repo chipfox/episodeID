@@ -86,14 +86,28 @@ def judge(dialogue: str, candidates: list[dict], series_name: str) -> dict | Non
 
 
 def vision_available() -> bool:
+    """Whether the title-card vision fallback can run.
+
+    Opt-in twice over: `titlecard_vision` must be on, and the AI endpoint must be
+    configured. The model actually used is `llm_vision_model` when set, otherwise
+    the ordinary `llm_model` — which is usually text-only, so leaving the vision
+    model blank only works if the text model happens to accept images. Nothing
+    else in the app calls a vision model; this is the only consumer.
+    """
     s = get_settings()
     return bool(available() and s["titlecard_vision"])
 
 
 def read_title_card(images: list[bytes], series_name: str) -> str | None:
     """Ask a vision-capable model to transcribe an episode title card.
-    It only transcribes; matching the text to an episode happens in our code,
-    so the model can't 'pick' an episode it merely guessed."""
+
+    Called only by the title-card pass, only when OCR read no card, part of one, or
+    one that disagrees with both the filename and the dialogue, and only with up to
+    four JPEG frames. It only transcribes text: matching that text to an episode is
+    done in our code (`titlecard.TitleIndex`), so the model cannot "pick" an episode
+    it merely guessed. Any failure here is caught by the caller and the OCR result
+    stands.
+    """
     import base64
     s = get_settings()
     content: list[dict] = [{"type": "text", "text": (

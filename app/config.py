@@ -66,24 +66,24 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "titlecard_ocr_device": ("auto", "TITLECARD_OCR_DEVICE", False),   # auto | cpu
     "titlecard_hwaccel": ("auto", "TITLECARD_HWACCEL", False),         # auto | off | cuda | vaapi
     "llm_vision_model": ("", "LLM_VISION_MODEL", False),
-    # Fast typed-decision model (Laya in LM Studio). It only rank-breaks the
-    # matcher's candidates; it never becomes trusted evidence.
-    "decision_enabled": (False, "DECISION_ENABLED", False),
-    "decision_base_url": ("http://10.0.0.11:1234/v1", "DECISION_BASE_URL", False),
-    "decision_model": ("laya", "DECISION_MODEL", False),
-    "decision_timeout": (30, "DECISION_TIMEOUT", False),
-    "decision_min_confidence": (0.15, "DECISION_MIN_CONFIDENCE", False),
-    "decision_max_candidates": (4, "DECISION_MAX_CANDIDATES", False),
-    "decision_max_input_chars": (800, "DECISION_MAX_INPUT_CHARS", False),
-    "decision_evidence": (True, "DECISION_EVIDENCE", False),
-    "decision_conflict_similarity": (0.85, "DECISION_CONFLICT_SIMILARITY", False),
+    # Two references this similar are one transcript filed twice (a wiki page under
+    # the wrong number, or both parts of a two-parter): the matcher and the plan
+    # both refuse to treat a match on one as proof of either.
+    "reference_duplicate_similarity": (0.85, "REFERENCE_DUPLICATE_SIMILARITY", False),
     "reference_repair": (True, "REFERENCE_REPAIR", False),
-    "decision_sample_seconds": (600, "DECISION_SAMPLE_SECONDS", False),
-    "decision_sample_start": (0, "DECISION_SAMPLE_START", False),
-    "decision_fast_path": (False, "DECISION_FAST_PATH", False),
-    "decision_sample_expand": (False, "DECISION_SAMPLE_EXPAND", False),
-    "decision_sample_max_windows": (5, "DECISION_SAMPLE_MAX_WINDOWS", False),
-    "decision_mismatch_windows": (2, "DECISION_MISMATCH_WINDOWS", False),
+    # Sampling: read the first N seconds of an eligible single-episode file instead of
+    # the whole thing. These were once named decision_* (after the retired decision
+    # model); the old keys and env names still work — see RENAMED / RENAMED_ENV below.
+    "sample_seconds": (600, "SAMPLE_SECONDS", False),
+    "sample_start": (0, "SAMPLE_START", False),
+    "sampling_fast_path": (False, "SAMPLING_FAST_PATH", False),
+    "sample_expand": (False, "SAMPLE_EXPAND", False),
+    "sample_max_windows": (5, "SAMPLE_MAX_WINDOWS", False),
+    "sample_mismatch_windows": (2, "SAMPLE_MISMATCH_WINDOWS", False),
+    # When the samples still cannot settle a file, read the whole file once (cached
+    # like any full read) and re-match it. Replaces hunting the Full-file match
+    # button per review row; the button stays for deliberately-skipped cases.
+    "sampling_full_escalate": (True, "SAMPLING_FULL_ESCALATE", False),
     # Sonarr
     "sonarr_url": ("", "SONARR_URL", False),
     "sonarr_api_key": ("", "SONARR_API_KEY", True),
@@ -97,6 +97,19 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "min_segment_seconds": (240, "MIN_SEGMENT_SECONDS", False),
     "min_score": (0.12, "MIN_SCORE", False),
     "min_margin": (0.04, "MIN_MARGIN", False),
+    # A weak absolute score is not proof of absence: on a short sample the right
+    # episode can sit under min_score while most windows still agree on it. The
+    # evidence gate accepts exactly that case, and only that case.
+    "evidence_gate": (True, "EVIDENCE_GATE", False),
+    "gate_min_window_share": (0.30, "GATE_MIN_WINDOW_SHARE", False),
+    # A sample must carry dialogue across several windows, not one lucky one:
+    # 4 × 90 s windows at a 45 s step is about three minutes of the sample.
+    "gate_min_windows": (4, "GATE_MIN_WINDOWS", False),
+    "gate_min_words": (60, "GATE_MIN_WORDS", False),
+    # References this similar cannot tell their episodes apart (a duplicated wiki
+    # transcript, or both parts of a two-parter): matching one proves nothing
+    # about the other, so such a segment is never a confident match.
+    "reference_twin_similarity": (0.70, "REFERENCE_TWIN_SIMILARITY", False),
     # Naming (Sonarr "Standard" default)
     "naming_format": ("{series} - S{season:02d}E{episode:02d} - {title} {quality}", "NAMING_FORMAT", False),
     "multi_episode_style": ("prefixed_range", "MULTI_EPISODE_STYLE", False),
@@ -200,6 +213,43 @@ def _coerce(value, default):
 _LEGACY_LANGUAGE = ("subtitle_language", "whisper_language")
 _RETIRED_KEYS = _LEGACY_LANGUAGE + ("tvdb_language",)
 
+# Settings renamed after the retired decision model, and to say what they actually
+# measure. Old names keep working: an older settings.json is folded onto the new keys
+# on read, and the old environment variables are still honoured, so an existing
+# deployment (including its stack.env) needs no change. A new name wins if both are set.
+RENAMED = {
+    "decision_sample_seconds": "sample_seconds",
+    "decision_sample_start": "sample_start",
+    "decision_fast_path": "sampling_fast_path",
+    "decision_sample_expand": "sample_expand",
+    "decision_sample_max_windows": "sample_max_windows",
+    "decision_mismatch_windows": "sample_mismatch_windows",
+    "decision_full_escalate": "sampling_full_escalate",
+    "decision_conflict_similarity": "reference_duplicate_similarity",
+    "reference_conflict_similarity": "reference_twin_similarity",
+}
+_RENAMED_ENV = {
+    "DECISION_SAMPLE_SECONDS": "sample_seconds",
+    "DECISION_SAMPLE_START": "sample_start",
+    "DECISION_FAST_PATH": "sampling_fast_path",
+    "DECISION_SAMPLE_EXPAND": "sample_expand",
+    "DECISION_SAMPLE_MAX_WINDOWS": "sample_max_windows",
+    "DECISION_MISMATCH_WINDOWS": "sample_mismatch_windows",
+    "DECISION_FULL_ESCALATE": "sampling_full_escalate",
+    "DECISION_CONFLICT_SIMILARITY": "reference_duplicate_similarity",
+    "REFERENCE_CONFLICT_SIMILARITY": "reference_twin_similarity",
+}
+# new env name -> old env name, for the lookup in get_settings/env_locked_keys.
+_OLD_ENV = {SCHEMA[key][1]: old for old, key in _RENAMED_ENV.items()}
+
+
+def _fold_renamed(stored: dict) -> dict:
+    for old, new in RENAMED.items():
+        if old in stored:
+            stored.setdefault(new, stored[old])
+            stored.pop(old, None)
+    return stored
+
 
 def _fold_language(stored: dict) -> dict:
     if "language" not in stored:
@@ -212,7 +262,7 @@ def _fold_language(stored: dict) -> dict:
 
 def _load_file() -> dict:
     try:
-        return _fold_language(json.loads(SETTINGS_FILE.read_text()))
+        return _fold_renamed(_fold_language(json.loads(SETTINGS_FILE.read_text())))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -225,6 +275,10 @@ def get_settings() -> dict:
         val = stored.get(key, default)
         if env in os.environ:
             val = os.environ[env]
+        else:
+            old = _OLD_ENV.get(env)
+            if old and old in os.environ:
+                val = os.environ[old]
         out[key] = _coerce(val, default)
     # A blank language is not a choice, it is an accident: normalise it here, once,
     # so no caller can forward it to the ASR server, where it means "guess for
@@ -235,7 +289,8 @@ def get_settings() -> dict:
 
 
 def env_locked_keys() -> list[str]:
-    return [k for k, (_, env, _) in SCHEMA.items() if env in os.environ]
+    return [k for k, (_, env, _) in SCHEMA.items()
+            if env in os.environ or (_OLD_ENV.get(env) or "") in os.environ]
 
 
 def public_settings() -> dict:
@@ -251,6 +306,7 @@ def save_settings(update: dict) -> None:
     with _lock:
         stored = _load_file()
         for key, val in update.items():
+            key = RENAMED.get(key, key)  # an older client may still send the old name
             if key not in SCHEMA:
                 continue
             default, _env, secret = SCHEMA[key]

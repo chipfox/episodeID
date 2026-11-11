@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .config import CONFIG_DIR
 
@@ -351,3 +351,42 @@ def active_job(series_id: int) -> dict | None:
         "SELECT id, kind, status FROM jobs WHERE series_id=? AND status IN ('queued','running') "
         "ORDER BY id LIMIT 1", (series_id,)).fetchone()
     return dict(r) if r else None
+
+
+# ---- retention -----------------------------------------------------------
+# A scan stores the full per-file result (~0.5 MB for 200 files) and a plan stores
+# every row, so history grows without bound if nothing trims it. The newest 20 of
+# each are plenty for the UI (only the latest plan is ever shown) and for undo.
+HISTORY_SCANS = 20
+HISTORY_PLANS = 20
+JOB_DAYS = 30
+
+
+def prune_history(series_id: int, keep_scans: int = HISTORY_SCANS,
+                  keep_plans: int = HISTORY_PLANS) -> dict:
+    """Keep the newest scans and plans of one series; delete older ones.
+
+    Plans go first so a scan still referenced by a surviving plan is never removed.
+    """
+    c = conn()
+    plans = c.execute("DELETE FROM plans WHERE series_id=? AND id NOT IN "
+                      "(SELECT id FROM plans WHERE series_id=? ORDER BY id DESC LIMIT ?)",
+                      (series_id, series_id, keep_plans)).rowcount
+    scans = c.execute("DELETE FROM scans WHERE series_id=? AND id NOT IN "
+                      "(SELECT id FROM scans WHERE series_id=? ORDER BY id DESC LIMIT ?) "
+                      "AND id NOT IN (SELECT scan_id FROM plans WHERE series_id=? AND scan_id IS NOT NULL)",
+                      (series_id, series_id, keep_scans, series_id)).rowcount
+    return {"scans": scans, "plans": plans}
+
+
+def prune_jobs(days: int = JOB_DAYS) -> int:
+    """Delete finished jobs older than `days`; their log lines cascade."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    return conn().execute(
+        "DELETE FROM jobs WHERE created < ? AND status NOT IN ('queued','running')",
+        (cutoff,)).rowcount
+
+
+def vacuum() -> None:
+    """Reclaim the space pruned rows left behind (SQLite does not shrink by itself)."""
+    conn().execute("VACUUM")

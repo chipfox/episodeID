@@ -329,6 +329,40 @@ def test_remote() -> str:
     return f"Remote transcription endpoint replied for '{model}'."
 
 
+def _remote_span(video: Path, start: float, duration: float | None) -> tuple[float, float]:
+    """The (begin, end) seconds of audio one request would send."""
+    total = duration_of(probe(video))
+    end = total if duration is None else min(total, start + duration)
+    return start, max(start, end)
+
+
+def _remote_transcribe_span(video: Path, ctx, start: float,
+                            duration: float | None, settings: dict) -> list[Cue]:
+    """Transcribe a span, splitting it into parts when one request would be refused.
+
+    The server caps a single upload (`whisper_max_upload_seconds`), so a joined
+    feature-length file used to be an ERROR row on every scan and its audio was
+    never read. The span is cut into consecutive parts that each fit, every part is
+    transcribed with its own offset, and the cues are joined in order — the matcher
+    then sees one transcript, exactly as for any other file. Parts are equal-sized
+    so the last one is never a sliver.
+    """
+    limit = int(settings.get("whisper_max_upload_seconds") or 0)
+    begin, end = _remote_span(video, start, duration)
+    span = end - begin
+    if limit <= 0 or span <= limit:
+        return _remote_transcribe(video, ctx, start, duration)
+    parts = int((span + limit - 1) // limit)
+    piece = span / parts
+    if ctx:
+        ctx.log(f"  {video.name}: {span / 60:.0f} min is longer than one request allows — "
+                f"transcribing {parts} parts and joining them")
+    cues: list[Cue] = []
+    for i in range(parts):
+        cues.extend(_remote_transcribe(video, ctx, begin + i * piece, piece))
+    return cues
+
+
 def transcribe(video: Path, ctx=None, start: float = 0.0,
                duration: float | None = None) -> list[Cue]:
     s = get_settings()
@@ -338,7 +372,7 @@ def transcribe(video: Path, ctx=None, start: float = 0.0,
         # remote call keeps no shared state. Holding the model lock around it
         # serialised every transcript in the app and made the read pool a no-op —
         # 8 cold files measured 151 s at one worker and 147 s at four.
-        return _remote_transcribe(video, ctx, start, duration)
+        return _remote_transcribe_span(video, ctx, start, duration, s)
     lang = s["language"]
     audio = decode_audio(video, lang, start, duration)
     with _lock:

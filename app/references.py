@@ -12,6 +12,7 @@ only downloaded once — important with OpenSubtitles' daily download cap.
 from __future__ import annotations
 
 import difflib
+import hashlib
 import html
 import json
 import re
@@ -36,6 +37,13 @@ BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # TF-IDF similarity at or above which two texts are the same episode (different
 # transcriptions of it); look-alike episodes of a show stay well below.
 SAME_EPISODE_SCORE = 0.35
+# Share of another episode's word bigrams that a fetched transcript contains, at or
+# above which it *is* that episode's text. Measured on the live X-Files corpus: the
+# wiki page filed under "Memento Mori" contains 0.911 of the Leonard Betts reference,
+# the next-closest different episode scores 0.232, and genuine two-parters 0.81-0.85.
+DUPLICATE_REFERENCE_SIMILARITY = 0.85
+# Below this many bigrams a reference is too short to judge containment safely.
+DUP_MIN_BIGRAMS = 400
 
 
 def ep_code(season: int, episode: int) -> str:
@@ -128,6 +136,8 @@ def transcript_quality(raw: str, cleaned: str | None = None) -> tuple[bool, str]
 
 _ref_cache: dict[str, tuple[int, int, dict | None]] = {}
 _ref_cache_lock = threading.Lock()
+_grams_cache: dict[int, tuple[tuple, dict[str, set]]] = {}
+_grams_lock = threading.Lock()
 
 
 def _load_ref_file(f: Path) -> dict | None:
@@ -167,6 +177,8 @@ def _load_ref_file(f: Path) -> dict | None:
             entry = {"source": f"manual:{f.name}", "text": text}
     with _ref_cache_lock:
         _ref_cache[key] = (st.st_mtime_ns, st.st_size, entry)
+    if entry is not None:
+        entry = {**entry, "_v": f"{st.st_mtime_ns}:{st.st_size}"}
     return entry
 
 
@@ -192,6 +204,24 @@ def load_refs(tvdb_id: int) -> dict[str, dict]:
             if entry:
                 out[ep_code(int(m[1]), int(m[2]))] = entry
     return out
+
+
+def reference_grams(tvdb_id: int) -> tuple[dict[str, dict], dict[str, set]]:
+    """The series' references and their word-pair sets, rebuilt only when a file changes.
+
+    Scoring a file against every reference needs each reference's bigrams; building
+    218 sets per request cost ~600 ms in the transcript view. The key is each file's
+    mtime and size, so an edited, re-fetched or swapped reference invalidates it.
+    """
+    refs = load_refs(tvdb_id)
+    key = tuple(sorted((c, str((e or {}).get("_v") or "")) for c, e in refs.items()))
+    hit = _grams_cache.get(tvdb_id)
+    if hit and hit[0] == key:
+        return refs, hit[1]
+    grams = {c: textsim.bigrams((e or {}).get("text") or "") for c, e in refs.items()}
+    with _grams_lock:
+        _grams_cache[tvdb_id] = (key, grams)
+    return refs, grams
 
 
 def warm_reference_cache() -> None:
@@ -494,6 +524,36 @@ def _same_series(r: dict, series: dict) -> bool:
     if series.get("imdb_id") and fd.get("parent_imdb_id"):
         return str(fd["parent_imdb_id"]).lstrip("t").lstrip("0") == series["imdb_id"].lstrip("t").lstrip("0")
     return titles_match(fd.get("parent_title") or "", series.get("name") or "")
+
+
+def duplicate_reference(code: str, text: str, texts: dict[str, str],
+                        threshold: float = DUPLICATE_REFERENCE_SIMILARITY,
+                        min_grams: int = DUP_MIN_BIGRAMS,
+                        grams: dict[str, set] | None = None) -> str | None:
+    """The episode whose reference `text` already contains, if any.
+
+    A wiki page can hold another episode's transcript (the X-Files wiki's
+    "Memento Mori/Transcript" is the Leonard Betts transcript). Two references that
+    are the same text make both episodes unprovable, and on an upgrade the accepted
+    page throws away a reference that worked — so the text is refused instead.
+    Containment, not cosine: the page carries gallery/nav chrome the shorter
+    reference does not, which drops a cosine to 0.745 while every one of the
+    reference's bigrams is still on the page.
+    """
+    page = textsim.bigrams(text)
+    if len(page) < min_grams:
+        return None
+    best, share = None, 0.0
+    for c, other_text in texts.items():
+        if c == code:
+            continue
+        other = (grams or {}).get(c) or textsim.bigrams(other_text)
+        if len(other) < min_grams:
+            continue
+        value = textsim.overlap(page, other)
+        if value > share:
+            best, share = c, value
+    return best if best is not None and share >= threshold else None
 
 
 def fetch_opensubs(os_: OpenSubtitles, series: dict, ep: dict, ctx) -> tuple[dict | None, str]:
@@ -881,6 +941,19 @@ def _save_repairs(tvdb_id: int, repairs: dict) -> None:
     f.write_text(json.dumps(repairs, indent=1))
 
 
+def _ref_fingerprint(text: str | None) -> str:
+    """A short hash of a reference's text, stored with a repair marker.
+
+    A marker says "this pair was repaired" or "don't retry: the replacement was the
+    other part". Both are only true for the reference that was there when the marker
+    was made — if the reference is later replaced (a wiki upgrade, a manual upload,
+    a renumber) the marker must stop suppressing repairs. Comparing this hash is how
+    a stale marker is recognised; markers from older builds have no hash and are
+    therefore treated as stale.
+    """
+    return hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()[:16]
+
+
 def _text_similarity(a: str, b: str) -> float:
     """TF-IDF cosine between two transcripts — the same view verify_flagged uses."""
     return textsim.similarity(a, b)
@@ -899,13 +972,13 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
     each other's text. Manual references are never overwritten; a pair already
     repaired (or whose replacement looked wrong) is left alone."""
     tvdb_id = series["tvdb_id"]
-    from .evidence import Lexicon
+    from .evidence import ReferenceConflicts
     refs_full = load_refs(tvdb_id)
     eps = {ep_code(e["season"], e["episode"]): e for e in series.get("episodes") or []}
     story = story or (lambda code: [code])
     try:
-        lex = Lexicon(eps, {c: r["text"] for c, r in refs_full.items()},
-                      story=story, conflict_similarity=similarity)
+        lex = ReferenceConflicts({c: r["text"] for c, r in refs_full.items()},
+                                 story=story, conflict_similarity=similarity)
     except Exception as e:  # noqa: BLE001
         ctx.log(f"Reference repair: couldn't compare references ({e}).")
         return {"conflicts": 0, "replaced": 0}
@@ -915,6 +988,17 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
         return out
     manual = {c for c, r in refs_full.items() if str(r.get("source", "")).startswith("manual")}
     repairs = _load_repairs(tvdb_id)
+    # A marker only holds while the reference it was made for is still the one on
+    # disk. Legacy markers (no hash) and markers for a reference that has changed
+    # since are dropped so a later change does not stay permanently unrepairable.
+    ref_hashes = {c: _ref_fingerprint((r or {}).get("text") or "") for c, r in refs_full.items()}
+    stale = [c for c, m in repairs.items() if m.get("ref") != ref_hashes.get(c)]
+    if stale:
+        for c in stale:
+            repairs.pop(c, None)
+        _save_repairs(tvdb_id, repairs)
+        ctx.log(f"Reference repair: forgot {len(stale)} repair marker(s) whose reference has "
+                "changed since — those pairs may be repaired again.")
     wanted: list[str] = []
     for pair in pairs:
         for code in pair["codes"]:
@@ -966,7 +1050,8 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
                     # every fetch would waste quota forever without changing anything.
                     for code in (a, b):
                         repairs[code] = {"keep": True, "why": "replacement matched the other part",
-                                         "similarity": round(sim, 3)}
+                                         "similarity": round(sim, 3),
+                                         "ref": ref_hashes.get(code) or _ref_fingerprint("")}
                     touched = True
                     ctx.log(f"{a}/{b}: OpenSubtitles' replacements still match each other "
                             f"({sim:.2f}) — keeping the old references. Won't look again for this "
@@ -987,7 +1072,8 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
                 sim = _text_similarity(new["text"], current) if current else 0.0
                 if current and sim >= SAME_EPISODE_SCORE:
                     repairs[code] = {"keep": True, "why": "replacement matched the other part",
-                                     "similarity": round(sim, 3)}
+                                     "similarity": round(sim, 3),
+                                     "ref": ref_hashes.get(code) or _ref_fingerprint("")}
                     touched = True
                     ctx.log(f"{code}: the replacement still resembles {other}'s reference "
                             f"({sim:.2f}) — keeping the old one; won't look again for it.")
@@ -1015,7 +1101,8 @@ def _replace_reference(tvdb_id: int, code: str, ref: dict, repairs: dict,
     _save(tvdb_id, code, ref)
     repairs[code] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                      "conflicted_with": conflicted_with,
-                     "replaced_source": previous.get("source") or "none"}
+                     "replaced_source": previous.get("source") or "none",
+                     "ref": _ref_fingerprint(ref.get("text") or "")}
 
 
 def ref_meta(tvdb_id: int) -> dict[str, dict]:
@@ -1070,6 +1157,24 @@ def refresh_references(series: dict, ctx, force_codes: list[str] | None = None,
     os_ = OpenSubtitles()
     fetched = upgraded = deferred = wiki_fails = 0
     quota_hit = None
+    # A wiki page can hold another episode's transcript. Accepting one makes two
+    # episodes unprovable, and on an upgrade it throws away a reference that worked,
+    # so a fetched transcript that repeats another reference is refused and the
+    # episode is marked as wiki-tried. One scorer for the whole fetch.
+    #
+    # Only trusted references veto. A reference OpenSubtitles/IMDb numbered the other
+    # way round is exactly what a wiki fetch is meant to replace — and with two of
+    # them swapped, each correct transcript equals the *other* reference's text, so
+    # letting a disputed reference veto would refuse both pages and leave the swap
+    # unfixable. A trusted reference (a wiki transcript, an upload, a verified
+    # subtitle) still refuses a page that repeats it.
+    _dup_texts = {c: (r.get("text") or "").strip() for c, r in have.items()
+                  if not is_low_trust(r) and (r.get("text") or "").strip()}
+    _dup_grams = {c: textsim.bigrams(t) for c, t in _dup_texts.items()}
+
+    def duplicate_of(code: str, text: str) -> str | None:
+        return duplicate_reference(code, text, _dup_texts, grams=_dup_grams)
+
     work = [(e, False) for e in todo] + [(e, True) for e in upgrades]
     try:
         if os_.configured and todo:
@@ -1102,7 +1207,14 @@ def refresh_references(series: dict, ctx, force_codes: list[str] | None = None,
                 if text:
                     good, why = transcript_quality(text)
                     if good:
-                        ref, note = {"source": "fandom", "text": text, "page": page}, f"fandom {page}"
+                        twin = duplicate_of(code, text)
+                        if twin:
+                            fandom_status, stub_note = "duplicate", (
+                                f"the page is {twin}'s transcript, not this episode's")
+                            note = stub_note
+                            ctx.log(f"{code} · {page}: {stub_note} — not using it")
+                        else:
+                            ref, note = {"source": "fandom", "text": text, "page": page}, f"fandom {page}"
                     else:
                         fandom_status, stub_note = "missing", why
                         note = why
@@ -1128,7 +1240,7 @@ def refresh_references(series: dict, ctx, force_codes: list[str] | None = None,
                 elif fandom_status == "error":
                     deferred += 1
                     ctx.log(f"{code} … {note}; keeping the OpenSubtitles reference for now")
-                elif fandom_status == "missing":
+                elif fandom_status in ("missing", "duplicate"):
                     cur = _read_cached(tvdb_id, code)
                     if cur:
                         cur["fandom_tried"] = True
@@ -1164,7 +1276,7 @@ def refresh_references(series: dict, ctx, force_codes: list[str] | None = None,
             if ref is None and stub_note and not note.startswith("error"):
                 note = f"{stub_note}; {note or 'no other source'}" if note != stub_note else stub_note
             if ref:
-                if ref.get("source") == "opensubtitles" and fandom_status == "missing":
+                if ref.get("source") == "opensubtitles" and fandom_status in ("missing", "duplicate"):
                     ref["fandom_tried"] = True
                 _save(tvdb_id, code, ref)
                 fetched += 1

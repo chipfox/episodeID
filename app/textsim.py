@@ -10,7 +10,10 @@ question from "are these two documents the same".
 """
 from __future__ import annotations
 
-from sklearn.feature_extraction.text import TfidfVectorizer
+import re
+from collections import Counter
+
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sklearn.preprocessing import normalize
 
 
@@ -47,3 +50,56 @@ def scorer(docs: list[str]):
         return (q @ m.T).toarray()[0]
 
     return score
+
+
+_WORD = re.compile(r"[a-z][a-z']{3,}")
+
+
+def shared_terms(a: str, b: str, limit: int = 14) -> list[str]:
+    """Words both texts use, the ones they use most first.
+
+    A reading aid for a person comparing a file's dialogue with an episode's
+    reference — names and places are what settle a match — not a score. Stop
+    words and words shorter than four letters are ignored.
+    """
+    ca = Counter(w for w in _WORD.findall((a or "").lower()) if w not in ENGLISH_STOP_WORDS)
+    cb = Counter(w for w in _WORD.findall((b or "").lower()) if w not in ENGLISH_STOP_WORDS)
+    both = [(min(ca[w], cb[w]), ca[w] + cb[w], w) for w in ca.keys() & cb.keys()]
+    both.sort(key=lambda t: (-t[0], -t[1], t[2]))
+    return [w for _low, _total, w in both[:limit]]
+
+
+# ------------------------------------------------------------------- containment
+# Share of one text's word pairs that appear in another. This is the measure for
+# "does this reference contain the dialogue we heard": it does not care that a
+# 10-minute sample is a tenth the length of a full reference, which is exactly what
+# a cosine punishes. Measured on the X-Files library (217 files): the episode's own
+# reference 0.70-0.94 (median 0.84), the closest unrelated reference 0.18 (p90 0.23).
+
+BIGRAM_FLOOR = 40  # fewer word pairs than this and a text is too short to judge
+
+
+def bigrams(text: str) -> set[tuple[str, str]]:
+    """The word pairs of a transcript, lowercased."""
+    words = re.findall(r"[a-z][a-z']+", (text or "").lower())
+    return set(zip(words, words[1:]))
+
+
+def containment(query_grams: set[tuple[str, str]],
+                document_grams: set[tuple[str, str]]) -> float:
+    """Share of the query's word pairs that the document contains (0..1)."""
+    if not query_grams:
+        return 0.0
+    return len(query_grams & document_grams) / len(query_grams)
+
+
+def overlap(a_grams: set[tuple[str, str]], b_grams: set[tuple[str, str]]) -> float:
+    """The larger share of either text found in the other, whichever is shorter.
+
+    "Are these two the same text" (the duplicate-reference question), as opposed to
+    containment's "is this text inside that one".
+    """
+    if not a_grams or not b_grams:
+        return 0.0
+    return len(a_grams & b_grams) / min(len(a_grams), len(b_grams))
+

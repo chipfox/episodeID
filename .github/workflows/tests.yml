@@ -1,0 +1,37 @@
+name: tests
+
+# The docker workflow only builds images. Without this, a broken matcher, planner or
+# settings rename reaches a deploy with nobody noticing — three tests sat red for weeks.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: dependencies
+        run: pip install -r requirements.txt
+      - name: tests
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          # The fast, deterministic suites. Title-card OCR suites are deliberately not
+          # here: they are slow and covered by the app's own checks.
+          for t in textsim settings_alias repair_marker db_retention evidence_view episode_scores \
+                   mislabel_rename reference_duplicate_guard reference_swap full_escalation \
+                   paste_ref planner_claims cache_prune auth_naming check_files golden_check; do
+            echo "::group::$t"
+            EPID_TEST_DIR="$RUNNER_TEMP/$t" python "tests/${t}_test.py"
+            echo "::endgroup::"
+          done

@@ -45,15 +45,25 @@ def decide(plan: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for it in plan.get("items") or []:
         rels = it.get("sources") or ([it["source"]] if it.get("source") else [])
+        evidence = sorted({sg.get("code") for sg in it.get("segments") or []
+                           if sg.get("code")
+                           and sg.get("confidence") in ("high", "manual")})
         for rel in rels:
             target = next((t["path"] for t in it.get("targets") or []), None)
             out[rel] = {"kind": it.get("kind"),
                         "code": code_from_name(Path(target).name) if target else None,
-                        "reason": it.get("reason")}
+                        "reason": it.get("reason"),
+                        "status": (it.get("status") or "").upper(),
+                        "expected": it.get("expected") or [],
+                        "evidence": evidence}
     return out
 
 
 def score(plan: dict, golden: dict) -> dict:
+    """Score a plan. An `ok` row is judged by the row's own evidence: the high
+    segments must name only the episodes its `expected` list declares (the planner
+    derives that from the filename), otherwise it is a wrong OK. That is what
+    catches a plan which marks everything OK without evidence."""
     decisions = decide(plan)
     swaps = golden.get("swaps") or {}
     undecidable = set(golden.get("undecidable") or [])
@@ -73,7 +83,26 @@ def score(plan: dict, golden: dict) -> dict:
                 out["missed_swaps"].append(rel)
             continue
         if kind == "ok":
-            out["correct"] += 1
+            # `ok` means two different things: "the evidence agrees with the name"
+            # (status OK) and "leave this unsettled file alone" (a deferral). Judge
+            # an assertion by its evidence, and a deferral like a review row.
+            if d.get("status") and d["status"] != "OK":
+                if rel in undecidable:
+                    out["deferred_correctly"].append(rel)
+                else:
+                    out["deferred_wrongly"].append(rel)
+                continue
+            expected = set(d.get("expected") or [])
+            evidence = set(d.get("evidence") or [])
+            if not expected:
+                out["wrong_ok"].append({"rel": rel, "why": "OK on a name with no episode"})
+            elif not evidence or not evidence <= expected:
+                out["wrong_ok"].append({
+                    "rel": rel,
+                    "why": f"OK but the evidence says {', '.join(sorted(evidence)) or 'nothing'}"
+                           f" — name says {', '.join(sorted(expected))}"})
+            else:
+                out["correct"] += 1
         elif kind == "review":
             if rel in undecidable:
                 out["deferred_correctly"].append(rel)

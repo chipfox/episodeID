@@ -80,4 +80,13 @@ media_text.extract_embedded = lambda _video, _info, _lang, allow_untagged=False:
     [media_text.Cue(1, 2, "whole file")], "embedded #2")
 fourth = media_text.sample_dialogue(video4)
 assert fourth["scope"] == "full" and fourth["duration"] == 300, fourth
+
+# dialogue_text reads the cached [start, end, text] cue shape and clips to a
+# head+tail — this is the text a scan row stores as its sample_text.
+assert media_text.dialogue_text([[0, 2, "First line."], [3, 5, "Second line."]]) == \
+    "First line. Second line."
+assert media_text.dialogue_text([{"text": "Dict line."}, [4, 6, "List line."]]) == \
+    "Dict line. List line."
+clip = media_text.dialogue_text([[0, 1, "word " * 30]] * 60, limit=150)
+assert len(clip) <= 150 + len(" … ") and "…" in clip, clip
 print("PASS")

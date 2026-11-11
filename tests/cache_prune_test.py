@@ -22,7 +22,9 @@ keep = root / "Season 1" / "Show - S01E01.mkv"
 replaced = root / "Season 1" / "Show - S01E02.mkv"
 backed = W / "media" / "tv" / "_episodeid_backup" / "Show" / "duplicates" / "old.mkv"
 backed.parent.mkdir(parents=True)
-for f, body in ((keep, b"a" * 100), (replaced, b"b" * 100), (backed, b"c" * 100)):
+# Distinct sizes on purpose: the cache key is size|mtime, and equal sizes written in
+# the same clock tick collide on filesystems with coarse timestamps (overlayfs).
+for f, body in ((keep, b"a" * 100), (replaced, b"b" * 200), (backed, b"c" * 300)):
     f.write_bytes(body)
 db.init()
 sid = db.add_series(1, "Show", "2020", str(root), None)

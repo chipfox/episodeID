@@ -25,7 +25,6 @@ from .config import CACHE_DIR, get_settings, language_tags
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".webm", ".mpg"}
 SUB_EXTS = (".srt", ".ass", ".ssa", ".vtt")
 TEXT_SUB_CODECS = {"subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text"}
-IMAGE_SUB_CODECS = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle", "xsub"}
 
 
 @dataclass
@@ -338,6 +337,16 @@ def cached_dialogue(video: Path) -> dict | None:
     return _read_cached(_cache_file(video), get_settings()["sidecar_subtitles"])
 
 
+def cached_sample(video: Path, start: float, duration: float) -> dict | None:
+    """The dialogue already read for this exact sample window, or None.
+
+    Read-only like cached_dialogue(): showing what a scan saw must not start a
+    transcription or write a cache.
+    """
+    return _read_cached(_cache_file(video, "sample", float(start), float(duration)),
+                        get_settings()["sidecar_subtitles"])
+
+
 def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     """Returns {"source": str, "duration": float, "cues": [[start, end, text], ...]}.
     source is "none" when no text could be produced."""
@@ -399,6 +408,25 @@ def get_dialogue(video: Path, ctx=None, allow_whisper: bool = True) -> dict:
     return data
 
 
+def dialogue_text(cues: list, limit: int = 1400) -> str:
+    """The dialogue as one string, clipped head+tail when it is over the limit.
+
+    Cues are `[start, end, text]` lists (the cache and Matcher shape) or dicts
+    with a `text` key. The clip keeps the opening and closing lines — where
+    episodes differ most — rather than a middle slice.
+    """
+    parts = []
+    for cue in cues:
+        text = cue.get("text") if isinstance(cue, dict) else (cue[2] if len(cue) > 2 else "")
+        if text:
+            parts.append(str(text).strip())
+    text = " ".join(" ".join(parts).split())
+    if len(text) <= limit:
+        return text
+    head = limit * 2 // 3
+    return f"{text[:head]} … {text[-(limit - head):]}"
+
+
 def _clip_cues(cues: list[Cue], start: float, end: float) -> list[Cue]:
     """Keep only the part of each cue inside [start, end], file-relative."""
     out = []
@@ -419,8 +447,8 @@ def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
     transcript and must never be treated as trusted evidence by the planner.
     """
     s = get_settings()
-    start = max(0.0, float(s["decision_sample_start"] if start is None else start))
-    window = float(s["decision_sample_seconds"] if duration is None else duration)
+    start = max(0.0, float(s["sample_start"] if start is None else start))
+    window = float(s["sample_seconds"] if duration is None else duration)
     cache = _cache_file(video, "sample", start, window)
     cached = _read_cached(cache, s["sidecar_subtitles"])
     if cached is not None and (cached["source"] != "none" or not allow_whisper
@@ -483,7 +511,3 @@ def sample_dialogue(video: Path, ctx=None, allow_whisper: bool = True,
 def duration_of(info: dict) -> float:
     """Alias kept local to sampling so existing callers keep using duration()."""
     return duration(info)
-
-
-def has_image_subs(info: dict) -> bool:
-    return any(s.get("codec_name") in IMAGE_SUB_CODECS for s in info.get("streams", []))

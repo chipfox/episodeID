@@ -17,6 +17,9 @@ import re
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+from .config import get_settings
+from . import textsim
+
 EP_RE = re.compile(r"(?i)\bS(\d{1,3})((?:[ ._-]*E\d{1,4})+)(?:-(\d{1,4})\b)?")
 EP_X_RE = re.compile(r"(?i)\b(\d{1,2})x(\d{2,3})(?:-(\d{2,3}))?\b")
 
@@ -52,6 +55,9 @@ class Matcher:
         if not refs:
             raise ValueError("No reference texts available — fetch references first.")
         self.codes = sorted(refs)
+        self.index = {code: i for i, code in enumerate(self.codes)}
+        self.refs = {code: refs[code] for code in self.codes}
+        self._pair_cache: dict[tuple[str, str], float] = {}
         self.s = settings
         docs = [refs[c] for c in self.codes] + [t for t in background or [] if t.strip()]
         self.vec = TfidfVectorizer(
@@ -68,12 +74,43 @@ class Matcher:
         idx = np.argsort(-scores)[:k]
         return [{"code": self.codes[i], "score": round(float(scores[i]), 4)} for i in idx]
 
+    def _reference_similarity(self, a: str, b: str) -> float:
+        """How much two references say the same thing (cached per pair).
+
+        Document sameness goes through `app/textsim.py`, the one view the repair
+        and conflict checks already use — the matcher's own 1-2 gram space exists
+        to find where an episode sits in a file, not to compare documents, and it
+        scores overlaps lower than this does.
+        """
+        key = (a, b) if a <= b else (b, a)
+        if key not in self._pair_cache:
+            self._pair_cache[key] = textsim.similarity(self.refs[a], self.refs[b])
+        return self._pair_cache[key]
+
+    def _conflict_twin(self, code: str, alternatives: list[dict]) -> str | None:
+        """The runner-up whose reference is nearly the same text as this one's.
+
+        Two references this alike (a wiki transcript filed under both numbers, or
+        both parts of a two-parter) cannot prove which episode a transcript came
+        from: a high score against one says exactly as much about the other.
+        """
+        if code not in self.refs:
+            return None
+        threshold = float(self.s["reference_twin_similarity"])
+        for alt in alternatives:
+            other = alt.get("code")
+            if not other or other == code or other not in self.refs:
+                continue
+            if self._reference_similarity(code, other) >= threshold:
+                return other
+        return None
+
     # ------------------------------------------------------------------
     def match_file(self, cues: list, duration: float) -> dict:
         win = float(self.s["window_seconds"])
         step = float(self.s["window_step_seconds"])
         if not cues:
-            return {"segments": [], "whole": []}
+            return {"segments": [], "whole": [], "evidence": _no_evidence()}
         end_t = max(duration, cues[-1][1])
         starts = np.arange(0, max(end_t - win * 0.5, step), step)
         windows, texts = [], []
@@ -87,8 +124,34 @@ class Matcher:
         whole = self.top(self.score_text(whole_text), 5)
 
         S = (self.vec.transform(texts) @ self.R.T).toarray()  # windows × episodes
-        words = np.array([len(t.split()) for t in texts])
-        S[words < 8] = 0.0  # silence / music-only windows carry no evidence
+        win_words = np.array([len(t.split()) for t in texts])
+        S[win_words < 8] = 0.0  # silence / music-only windows carry no evidence
+
+        used = win_words >= 8
+        evidence = {
+            "windows": int(used.sum()),
+            # How much dialogue the file actually offers — overlapping windows would
+            # count the same speech two or three times, which would make a near-silent
+            # episode look as substantial as a normal one.
+            "words": len(whole_text.split()),
+            "rank_share": 0.0,
+            "top1": whole[0]["code"] if whole else None,
+            "top1_score": whole[0]["score"] if whole else 0.0,
+            "conflicted": False,
+            "twin": None,
+        }
+        # Which episode each window votes for is evidence the segment gates throw
+        # away: a sample can sit under the absolute score floor while most windows
+        # still agree on one episode. classify() uses this to tell "weak but
+        # consistent" apart from "not enough dialogue to say anything".
+        top1 = evidence["top1"]
+        if top1 and used.any():
+            i = self.index.get(top1)
+            if i is not None:
+                evidence["rank_share"] = round(
+                    float((S[used].argmax(axis=1) == i).mean()), 3)
+            evidence["twin"] = self._conflict_twin(top1, whole[1:])
+            evidence["conflicted"] = bool(evidence["twin"])
 
         labels = self._viterbi(S)
         runs = self._runs(labels, windows)
@@ -120,6 +183,10 @@ class Matcher:
             if len(self.codes) < FEW_REFS and best["score"] < PLAINLY_SAME:
                 why.append(f"only {len(self.codes)} reference{'s' if len(self.codes) > 1 else ''} to compare "
                            f"with — {best['score']:.2f} isn't enough to say it's that episode")
+            twin = self._conflict_twin(best["code"], alts[1:])
+            if twin:
+                why.append(f"references for {best['code']} and {twin} are near-identical — "
+                           "neither can prove which of them was read")
             high = not why
             segments.append({
                 "start": round(r["start"], 1), "end": round(r["end"], 1),
@@ -137,7 +204,7 @@ class Matcher:
                 out[-1]["score"] = max(out[-1]["score"], sg["score"])
             else:
                 out.append(sg)
-        return {"segments": out, "whole": whole}
+        return {"segments": out, "whole": whole, "evidence": evidence}
 
     def _viterbi(self, S: np.ndarray) -> list[int | None]:
         n_w, n_e = S.shape
@@ -178,7 +245,85 @@ class Matcher:
         return runs
 
 
-def classify(expected: list[str], segments: list[dict], text_source: str) -> tuple[str, str]:
+def _no_evidence() -> dict:
+    """The evidence block for a file with no dialogue at all."""
+    return {"windows": 0, "words": 0, "rank_share": 0.0, "top1": None,
+            "top1_score": 0.0, "conflicted": False, "twin": None}
+
+
+def evidence_accepts(expected: list[str], segments: list[dict],
+                     evidence: dict | None) -> bool:
+    """A weak absolute score is not proof of absence.
+
+    `min_score` is calibrated for a whole transcript; on a short sample the right
+    episode can score under it while most 90-second windows still vote for it.
+    Accept exactly that case — and only when every independent signal agrees:
+
+    * the whole transcript's best episode *is* the file's one episode, so this is
+      the filename being corroborated by weak evidence, never a filename override;
+    * at least `gate_min_window_share` of the usable windows rank it first — a
+      single lucky window out of thirteen is not agreement;
+    * at least `gate_min_windows` windows carry real dialogue, and the file holds
+      at least `gate_min_words` words of it — a near-silent episode produces one
+      terse window and a 1.00 rank share, which proves nothing;
+    * no surviving segment names another episode, which is a contradiction rather
+      than a gap;
+    * the winning reference has no near-duplicate twin, because a match on one of
+      two near-identical references cannot say which of them was read.
+
+    Anything that fails stays a deferral, which is the safe direction: the only
+    outcome worse than "review this" is a confident wrong answer.
+    """
+    if not expected or len(expected) != 1 or not evidence:
+        return False
+    settings = get_settings()
+    if not settings["evidence_gate"]:
+        return False
+    if evidence.get("top1") != expected[0] or evidence.get("conflicted"):
+        return False
+    if float(evidence.get("rank_share") or 0.0) < float(settings["gate_min_window_share"]):
+        return False
+    if int(evidence.get("windows") or 0) < int(settings["gate_min_windows"]):
+        return False
+    if int(evidence.get("words") or 0) < int(settings["gate_min_words"]):
+        return False
+    return all(seg.get("code") in expected for seg in segments)
+
+
+def promote(expected: list[str], segments: list[dict], evidence: dict | None,
+            duration: float) -> list[dict]:
+    """Turn an accepted-but-unsegmented result into one high segment over the file.
+
+    `classify()` already returns OK when the evidence gate accepts, but a file with
+    no segments gives the plan nothing to show — it would be a review row whose
+    status claims OK, which is worse than either answer. The promotion is
+    materialised here as the segment the plan and the GUI display, carrying the
+    evidence that justified it.
+    """
+    if segments or not evidence_accepts(expected, [], evidence):
+        return segments
+    ev = evidence or {}
+    return [{
+        "start": 0.0, "end": float(duration or 0), "code": expected[0],
+        "score": float(ev.get("top1_score") or 0.0), "margin": 0.0,
+        "confidence": "high", "alternatives": [], "words": int(ev.get("words") or 0),
+        "evidence": "whole-file agreement",
+        "why": (f"{int(ev.get('windows') or 0)} windows agree "
+                f"({float(ev.get('rank_share') or 0):.0%}), "
+                f"{int(ev.get('words') or 0)} words of dialogue"),
+    }]
+
+
+def classify(expected: list[str], segments: list[dict], text_source: str,
+             evidence: dict | None = None) -> tuple[str, str]:
+    status, note = _classify_segments(expected, segments, text_source)
+    if status in ("NO_MATCH", "LOW_CONFIDENCE") and evidence_accepts(expected, segments, evidence):
+        return "OK", ""
+    return status, note
+
+
+def _classify_segments(expected: list[str], segments: list[dict],
+                       text_source: str) -> tuple[str, str]:
     if not segments:
         if text_source == "none":
             return "NO_TEXT", "No subtitles and no transcription available"

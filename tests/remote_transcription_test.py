@@ -24,7 +24,7 @@ from app import transcribe  # noqa: E402
 video = W / "media" / "Show" / "Season 01" / "Show - S01E01.mkv"
 video.parent.mkdir(parents=True)
 video.write_bytes(b"not a real video")
-transcribe._encode_remote_audio = lambda _video, _lang: b"encoded-audio"
+transcribe._encode_remote_audio = lambda _video, _lang, *_args: b"encoded-audio"
 transcribe.probe = lambda _video: {"format": {"duration": "12.3"}, "streams": []}
 
 calls = []
@@ -79,4 +79,25 @@ plain = transcribe.transcribe(video)
 assert len(plain) == 1
 assert plain[0].text == "An untimed transcript."
 assert plain[0].start == 0.0 and plain[0].end == 12.3
+
+# --- a span longer than one request is split into equal parts and joined --------
+# The real case is the 87-minute joined two-parter: the server refuses it whole,
+# so it was an ERROR row on every scan and its audio was never read.
+transcribe.httpx.post = fake_post
+transcribe.probe = lambda _video: {"format": {"duration": "7200"}, "streams": []}
+os.environ["WHISPER_MAX_UPLOAD_SECONDS"] = "3600"
+calls.clear()
+joined = transcribe.transcribe(video)
+assert len(calls) == 2, f"expected two uploads, got {len(calls)}"
+assert len(joined) == 4, joined
+assert (joined[0].start, joined[0].text) == (0.25, "First line.")
+assert (joined[2].start, joined[2].text) == (3600.25, "First line."), joined[2]
+# Order is preserved and the second part's cues sit after the first part's.
+assert [c.start for c in joined] == sorted(c.start for c in joined), joined
+
+# A span that exactly fits is still one request.
+transcribe.probe = lambda _video: {"format": {"duration": "3600"}, "streams": []}
+calls.clear()
+transcribe.transcribe(video)
+assert len(calls) == 1, calls
 print("PASS")

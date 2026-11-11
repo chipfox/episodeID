@@ -12,13 +12,12 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, db, executor, jobs, llm, titlecard, tvdb
-from . import decision
+from . import __version__, db, executor, jobs, llm, textsim, titlecard, tvdb
 from . import integrity, pipeline, redownload  # noqa: F401  (registers job handlers)
 from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, language_choices,
                      public_settings, safe_media_path, save_settings)
-from .references import (OpenSubtitles, _load_misses, clear_reference, ep_code, load_refs,
-                         manual_dir)
+from .references import (OpenSubtitles, clear_reference, ep_code, manual_dir, reference_grams)
+from .views import best_dialogue, episode_match, series_out
 from .media_text import VIDEO_EXTS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -107,9 +106,8 @@ def status():
             "tvdb": bool(s["tvdb_api_key"]), "opensubtitles": bool(s["opensubtitles_api_key"]),
             "llm": llm.available(), "whisper": s["whisper_enabled"],
             "whisper_backend": s["whisper_backend"],
-            "decision": decision.available(), "decision_fast_path": s["decision_fast_path"],
-            "decision_sample_expand": bool(s["decision_fast_path"] and s["decision_sample_expand"]),
-            "decision_evidence": bool(s["decision_enabled"] and s["decision_evidence"]),
+            "sampling_fast_path": s["sampling_fast_path"],
+            "sample_expand": bool(s["sampling_fast_path"] and s["sample_expand"]),
             "reference_repair": bool(s["reference_repair"]),
             "titlecards": bool(s["titlecard_enabled"] and titlecard.available()),
             "sonarr": bool(s["sonarr_url"] and s["sonarr_api_key"])}
@@ -342,10 +340,6 @@ def test_service(service: str):
             if not (s["llm_base_url"] and s["llm_model"]):
                 return {"ok": False, "message": "Set a base URL and model first."}
             return {"ok": True, "message": f"Model replied: {llm.test_connection()!r}"}
-        if service == "decision":
-            if not decision.available():
-                return {"ok": False, "message": "Enable the decision model and set its URL/model."}
-            return {"ok": True, "message": decision.test_connection()}
         if service == "sonarr":
             r = httpx.get(f"{s['sonarr_url'].rstrip('/')}/api/v3/system/status",
                           headers={"X-Api-Key": s["sonarr_api_key"]}, timeout=15)
@@ -545,13 +539,6 @@ def folders_resolve(path: str):
             "videos": _video_count(p), "results": results[:8]}
 
 
-@app.get("/api/guess")
-def guess(path: str):
-    p = safe_media_path(path)
-    q, tid = guess_query(p.name)
-    return {"query": q, "tvdb_id": tid}
-
-
 # -------------------------------------------------------------------- series
 
 class NewSeries(BaseModel):
@@ -559,85 +546,9 @@ class NewSeries(BaseModel):
     tvdb_id: int
 
 
-def _series_out(s: dict, full: bool = False) -> dict:
-    refs = load_refs(s["tvdb_id"])
-    regular = [e for e in s["episodes"] if e["season"] > 0]
-    out = {k: v for k, v in s.items() if k != "episodes"}
-    out["episode_count"] = len(regular)
-    out["reference_count"] = sum(1 for e in regular
-                                 if ep_code(e["season"], e["episode"]) in refs)
-    out["active_job"] = db.active_job(s["id"])
-    scan = db.latest_scan_summary(s["id"])
-    out["last_scan"] = {"created": scan["created"], "counts": scan["counts"]} if scan else None
-    plan = db.latest_plan_summary(s["id"])
-    # the plan is the verdict (title cards, overrides and applied changes included);
-    # only shown when it was made from the latest scan or after it
-    out["plan"] = plan if plan and (not scan or plan["created"] >= scan["created"]) else None
-    from .autocheck import load_state
-    ac = load_state(s["id"])
-    pend = {k: v for k, v in (ac.get("pending") or {}).items() if k != "files"} or None
-    root = Path(s["path"])
-    flagged = [x for x in ac.get("imports") or [] if not x.get("ok") and (root / x["rel"]).exists()]
-    out["file_check"] = {"checked_at": ac.get("checked_at"), "pending": pend, "imports": flagged}
-    from . import integrity
-    out["integrity"] = integrity.card_summary(s)
-    from .executor import backup_videos
-    try:
-        out["backup"] = backup_videos(s)
-    except OSError:
-        out["backup"] = None
-    if full:
-        out["integrity_files"] = integrity.current(s)
-        from .redownload import finished as _rd_finished
-        from .redownload import load_state as _rd_state
-        from .redownload import missing_episodes
-        out["missing_count"] = len(missing_episodes(s))
-        out["redownloads"] = sum(1 for r in (_rd_state(s["id"]).get("requested") or {}).values()
-                                 if isinstance(r, dict)
-                                 and r.get("status") in ("waiting", "stuck", "failed", "partly imported")
-                                 and not _rd_finished(r))
-        from .pipeline import reference_swaps
-        last = db.latest_scan(s["id"]) if scan else None
-        from .references import load_swapped
-        out["ref_swaps"] = reference_swaps((last or {}).get("results", {}).get("files") or [], refs,
-                                           load_swapped(s["tvdb_id"]), (last or {}).get("created"))
-        misses = _load_misses(s["tvdb_id"])
-        out["episodes"] = [{
-            **e, "code": ep_code(e["season"], e["episode"]),
-            "ref": (refs.get(ep_code(e["season"], e["episode"])) or {}).get("source"),
-            "ref_note": _ref_note(refs.get(ep_code(e["season"], e["episode"])),
-                                  ep_code(e["season"], e["episode"]), e.get("title")),
-            "miss": misses.get(ep_code(e["season"], e["episode"])),
-        } for e in s["episodes"]]
-    return out
-
-
-def _ref_note(ref: dict | None, code: str = "", title: str | None = None) -> str:
-    n = _ref_note_inner(ref, code, title)
-    if ref and ref.get("swapped_from") and "swapped" not in n:
-        n = (n + " · " if n else "") + f"swapped from {ref['swapped_from']}"
-    return n
-
-
-def _ref_note_inner(ref: dict | None, code: str = "", title: str | None = None) -> str:
-    if not ref:
-        return ""
-    if ref.get("source") == "opensubtitles":
-        from .references import describe_conflict, is_low_trust
-        n = f"via {ref.get('via')}"
-        if is_low_trust(ref):
-            n += f" — ⚠ {describe_conflict(ref, code, title)}"
-        elif ref.get("verified"):
-            n += f" — {ref['verified']}"
-        return n
-    if ref.get("source") == "fandom":
-        return ref.get("page", "")
-    return ""
-
-
 @app.get("/api/series")
 def series_list():
-    return [_series_out(s) for s in db.list_series()]
+    return [series_out(s) for s in db.list_series()]
 
 
 @app.post("/api/series")
@@ -655,13 +566,13 @@ def series_add(body: NewSeries):
         raise HTTPException(400, "That folder has already been added")
     # Loads the TVDB episode list, then fetches references straight away.
     jobs.submit("fetch_refs", sid)
-    return _series_out(db.get_series(sid))
+    return series_out(db.get_series(sid) or _404())
 
 
 @app.get("/api/series/{sid}")
 def series_get(sid: int):
     s = db.get_series(sid) or _404()
-    return _series_out(s, full=True)
+    return series_out(s, full=True)
 
 
 @app.patch("/api/series/{sid}/options")
@@ -689,7 +600,7 @@ def series_options(sid: int, body: dict):
     if "imdb_id" in body:
         db.update_series(sid, imdb_id=(body["imdb_id"] or None))
     db.update_series(sid, options=opts)
-    return _series_out(db.get_series(sid), full=True)
+    return series_out(db.get_series(sid) or _404(), full=True)
 
 
 @app.delete("/api/series/{sid}")
@@ -777,6 +688,78 @@ def delete_reference(sid: int, code: str):
         for old in d.glob(f"{code}*"):
             old.unlink()
     return {"ok": True}
+
+
+@app.get("/api/series/{sid}/evidence")
+def evidence_view(sid: int, rel: str = "", code: str = ""):
+    """The dialogue a scan judged one file on, beside one episode's reference text.
+
+    The GUI shows these side by side so a person can read the two and decide for
+    themselves. Read-only and cheap: it reuses the text the last scan kept (and a
+    whole-file transcript already cached), and never transcribes anything.
+    """
+    series = db.get_series(sid) or _404()
+    refs, ref_grams = reference_grams(series["tvdb_id"])
+    eps = {ep_code(e["season"], e["episode"]): e for e in series["episodes"] if e["season"] > 0}
+    chosen = code.strip().upper()
+    file_out = None
+
+    if rel:
+        scan = db.latest_scan(sid)
+        if not scan:
+            raise HTTPException(404, "No scan yet — scan the files first")
+        entry = next((f for f in (scan.get("results") or {}).get("files") or []
+                      if f.get("rel") == rel), None)
+        if entry is None:
+            raise HTTPException(404, "That file is not in the latest scan — scan again")
+        text, scope = best_dialogue(series, rel, entry)
+        start, end = ((entry.get("sample_start"), entry.get("sample_end"))
+                      if scope in ("sample", "excerpt") else (None, None))
+        if not chosen:
+            segs = entry.get("segments") or []
+            chosen = str((segs[0].get("code") if segs else "")
+                         or ((entry.get("expected") or [""])[0]) or "").upper()
+        file_out = {
+            "rel": rel, "status": entry.get("status"), "note": entry.get("note") or "",
+            "text": text, "words": len(text.split()),
+            "source": entry.get("text_source") or "none",
+            "bigrams": 0,
+            "scope": scope, "scan_scope": entry.get("scope") or scope,
+            "sample_start": start, "sample_end": end,
+            "file_duration": entry.get("file_duration") or entry.get("duration"),
+            "segments": entry.get("segments") or [],
+        }
+
+    ref = refs.get(chosen) or {}
+    ref_text = str(ref.get("text") or "")
+    matches = episode_match(series)
+    contains, shared, ranked = None, [], []
+    if file_out and file_out["text"] and refs:
+        query = textsim.bigrams(file_out["text"])
+        file_out["bigrams"] = len(query)
+        codes = [c for c in eps if c in refs]
+        if len(query) >= textsim.BIGRAM_FLOOR:
+            grams = {c: ref_grams.get(c) or set() for c in codes}
+            pairs = sorted(((textsim.containment(query, grams[c]), c) for c in codes), reverse=True)
+            ranked = [{"code": c, "title": (eps.get(c) or {}).get("title") or "",
+                       "containment": round(v, 4)} for v, c in pairs[:6]]
+            hit = next((v for v, c in pairs if c == chosen), None)
+            contains = round(hit, 4) if hit is not None else None
+            shared = textsim.shared_terms(file_out["text"], ref_text)
+
+    return {
+        "file": file_out,
+        "code": chosen,
+        "reference": ({"code": chosen, "title": (eps.get(chosen) or {}).get("title") or "",
+                       "source": ref.get("source") or "", "words": len(ref_text.split()),
+                       "text": ref_text} if ref_text else None),
+        "episodes": [{"code": c, "title": (eps[c] or {}).get("title") or "", "has_ref": c in refs,
+                      "match": matches.get(c)} for c in eps],
+        "containment": contains,
+        "bigram_floor": textsim.BIGRAM_FLOOR,
+        "shared": shared,
+        "ranked": ranked,
+    }
 
 
 # ---------------------------------------------------------------------- jobs
@@ -884,7 +867,7 @@ def titlecard_check(sid: int, body: CardCheckReq):
 @app.post("/api/series/{sid}/jobs")
 def start_job(sid: int, body: JobReq):
     db.get_series(sid) or _404()
-    if body.kind not in ("refresh_episodes", "fetch_refs", "scan", "replan", "ai_check", "check_files", "find_releases"):
+    if body.kind not in ("refresh_episodes", "fetch_refs", "scan", "ai_check", "check_files", "find_releases"):
         raise HTTPException(400, "Unknown job")
     if db.active_job(sid):
         raise HTTPException(409, "A job is already running for this series")

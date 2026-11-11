@@ -106,21 +106,23 @@ try:
 except RuntimeError as e:
     assert "model load failed" in str(e), e
 
-# A file the server is going to refuse must be refused *before* it is encoded and
-# uploaded. The 87-minute two-parter cost 40 s of shipping audio on every scan to
-# learn something ffprobe had already told us.
+# A file longer than the cap is split into parts that fit instead of being refused:
+# the 87-minute two-parter used to be an ERROR row on every scan and its audio was
+# never read. Equal parts, each carrying its file-relative offset.
 calls.clear()
+transcribe.httpx.post = fake_post
 transcribe.probe = lambda _video: {"format": {"duration": "5220"}, "streams": []}
-try:
-    transcribe.transcribe(video)
-    raise AssertionError("an over-long file must be refused without uploading")
-except RuntimeError as e:
-    assert "87 min" in str(e) and "{" not in str(e), e
-assert calls == [], f"nothing may be encoded or posted: {calls}"
+joined = transcribe.transcribe(video)
+posts = [c for c in calls if c[0] == "post"]
+encodes = [c for c in calls if c[0] != "post"]
+assert len(posts) == 2, f"87 min should be two uploads, got {len(posts)}"
+assert [round(e[2]) for e in encodes] == [0, 2610], encodes
+assert [round(e[3]) for e in encodes] == [2610, 2610], encodes
+assert joined[0].start == 0.5 and joined[2].start == 2610.5, joined
 
 # A sample window out of that same file is still fine: the request has to fit the
 # server's limit, not the file.
-transcribe.httpx.post = fake_post
+calls.clear()
 window = transcribe.transcribe(video, start=0, duration=600)
 assert window and calls[-1][0] == "post", calls
 

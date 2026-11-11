@@ -83,12 +83,19 @@ def probe(video: Path) -> dict:
     return {"duration": f((data.get("format") or {}).get("duration")), "streams": streams}
 
 
-def _decode(video: Path, method: str, duration: float | None, ctx=None) -> dict:
-    """Decode every video and audio frame. Returns {problems, count, decoded_to, rc}."""
+def _decode(video: Path, method: str, duration: float | None, ctx=None,
+            selector: str = "v:0") -> dict:
+    """Decode one stream of the file. Returns {problems, count, decoded_to, rc}.
+
+    One stream at a time on purpose: ffmpeg stops at the *shortest* mapped stream, so
+    mapping video and audio together made a file whose audio ended early look "cut
+    short" (a short audio track decoded to 18 s of a 30 s file). The caller decodes
+    video for the truncation verdict and audio for its own errors.
+    """
     from .titlecard import _hw_args
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "level+warning", "-progress", "pipe:1",
            "-stats_period", "0.25", *_hw_args(method), "-i", str(video),
-           "-map", "0:v:0?", "-map", "0:a?", "-f", "null", "-"]
+           "-map", f"0:{selector}?", "-f", "null", "-"]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
     now = {"t": 0.0}
 
@@ -164,34 +171,54 @@ def check_file(video: Path, ctx=None, force: bool = False) -> dict:
         return res
     dur = info["duration"]
     res["duration"] = dur
-    method = decode_method()
-    d = _decode(video, method, dur, ctx)
-    if method != "cpu" and d["rc"] != 0 and d["decoded_to"] < 1 and \
-            any(re.search(r"(?i)hwaccel|cuda|vaapi|device", x["msg"]) for x in d["problems"]):
-        method = "cpu"  # the GPU couldn't take this file: decode it on the CPU instead
-        d = _decode(video, method, dur, ctx)
-    res.update(method=method, seconds=round(time.time() - t0, 1), errors=d["count"], problems=d["problems"],
-               decoded_to=round(d["decoded_to"], 1))
-    issues = []
-    if dur and d["decoded_to"] < dur - max(10.0, 0.03 * dur):
-        issues.append(f"decoding stopped at {_fmt(d['decoded_to'])} of {_fmt(dur)} — the file may be cut short")
     vids = [s for s in info["streams"] if s["type"] == "video"]
     auds = [s for s in info["streams"] if s["type"] == "audio"]
+    empty = {"problems": [], "count": 0, "decoded_to": 0.0, "rc": None}
+    method = decode_method()
+    dv = _decode(video, method, dur, ctx, "v:0") if vids else dict(empty)
+    if vids and method != "cpu" and dv["rc"] != 0 and dv["decoded_to"] < 1 and \
+            any(re.search(r"(?i)hwaccel|cuda|vaapi|device", x["msg"]) for x in dv["problems"]):
+        method = "cpu"  # the GPU couldn't take this file: decode it on the CPU instead
+        dv = _decode(video, method, dur, ctx, "v:0")
+    # The audio pass runs without ctx: a second 0→100 % sweep per file would look
+    # like the check restarting. Its errors still count.
+    da = _decode(video, method, None, None, "a:0") if auds else dict(empty)
+    problems = ([{**p, "stream": "video"} for p in dv["problems"]] +
+                [{**p, "stream": "audio"} for p in da["problems"]])
+    errors = dv["count"] + da["count"]
+    decoded_to = max(dv["decoded_to"], da["decoded_to"])
+    res.update(method=method, seconds=round(time.time() - t0, 1), errors=errors, problems=problems,
+               decoded_to=round(decoded_to, 1))
+    issues = []
+    if vids:
+        vdur = float(vids[0].get("duration") or dur or 0)
+        if vdur and dv["decoded_to"] < vdur - max(10.0, 0.03 * vdur):
+            issues.append(f"video stops at {_fmt(dv['decoded_to'])} of {_fmt(vdur)} — "
+                          "the file may be cut short")
+    if auds:
+        adur = float(auds[0].get("duration") or 0)
+        if adur and da["decoded_to"] < adur - max(3.0, 0.02 * adur):
+            issues.append(f"audio stops at {_fmt(da['decoded_to'])} of {_fmt(adur)} — "
+                          "the rest of the file has no sound")
     if not vids:
         issues.append("no video stream")
     if vids and auds:
         v, a = vids[0], auds[0]
-        if v["duration"] and a["duration"] and abs(v["duration"] - a["duration"]) > max(3.0, 0.02 * v["duration"]):
-            issues.append(f"audio and video lengths differ ({_fmt(a['duration'])} audio, {_fmt(v['duration'])} video)")
+        # Prefer the container's declared lengths; fall back to what actually decoded,
+        # so a muxer that omits per-stream durations still shows the mismatch.
+        vlen = float(v["duration"] or dv["decoded_to"] or 0)
+        alen = float(a["duration"] or da["decoded_to"] or 0)
+        if vlen and alen and abs(vlen - alen) > max(3.0, 0.02 * max(vlen, alen)):
+            issues.append(f"audio and video lengths differ ({_fmt(alen)} audio, {_fmt(vlen)} video)")
         if v["start"] is not None and a["start"] is not None and abs(v["start"] - a["start"]) > 1.0:
             first = "audio" if a["start"] > v["start"] else "video"
             issues.append(f"{first} starts {abs(v['start'] - a['start']):.1f} s after the "
                           f"{'video' if first == 'audio' else 'audio'}")
     res["issues"] = issues
     truncated = any("cut short" in i for i in issues)
-    res["status"] = "bad" if truncated or d["count"] >= BAD_ERRORS or (d["rc"] not in (0, None) and not
-                                                                     d["decoded_to"]) else \
-        "warn" if d["count"] or issues else "ok"
+    res["status"] = "bad" if truncated or errors >= BAD_ERRORS or (dv["rc"] not in (0, None) and
+                                                                 not decoded_to) else \
+        "warn" if errors or issues else "ok"
     _save(key, res)
     return res
 

@@ -16,8 +16,12 @@ import sys
 from pathlib import Path
 
 W = Path(os.environ.get("EPID_TEST_DIR", "/tmp/epid_swap"))
+# The dialogue in this test is sidecar .srt files only, so reading them is the point.
+# Set it here: a deployment may run with SIDECAR_SUBTITLES=false (Bazarr-managed
+# sidecars are not evidence there), and this test must not depend on ambient env.
 os.environ.update(MEDIA_ROOT=str(W / "media"), CONFIG_DIR=str(W / "config"),
-                  CACHE_DIR=str(W / "cache"), WHISPER_ENABLED="false")
+                  CACHE_DIR=str(W / "cache"), WHISPER_ENABLED="false",
+                  SIDECAR_SUBTITLES="true")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import db, pipeline, references  # noqa: E402

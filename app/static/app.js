@@ -34,13 +34,21 @@ function toast(msg, ms = 3500) {
 const fail = (e) => toast("⚠ " + e.message, 6000);
 
 // sticky: a click outside the dialog doesn't close it (dialogs you type into and read from).
-function modal(html, { sticky = false } = {}) {
-  $("#modal-box").innerHTML = html;
+function modal(html, { sticky = false, wide = false } = {}) {
+  const box = $("#modal-box");
+  box.innerHTML = html;
+  box.classList.toggle("wide", wide);
   $("#modal").classList.remove("hidden");
   $("#modal").dataset.sticky = sticky ? "1" : "";
-  return $("#modal-box");
+  return box;
 }
-function closeModal() { $("#modal").classList.add("hidden"); $("#modal-box").innerHTML = ""; $("#modal-box").style.width = ""; }
+function closeModal() {
+  const box = $("#modal-box");
+  $("#modal").classList.add("hidden");
+  box.innerHTML = "";
+  box.classList.remove("wide");
+  box.style.width = "";
+}
 // Close on a click outside the dialog — only when the press started outside it too, so
 // selecting text in a box and letting go past the edge doesn't close it.
 let modalDownOutside = false;
@@ -68,6 +76,10 @@ const STATUS_BADGE = {
   NO_TEXT: "", NO_MATCH: "b-warn", ERROR: "b-bad", MANUAL: "b-info", PARTS: "b-info",
 };
 const KIND_BADGE = { rename: "b-info", split: "b-warn", join: "b-warn", aside: "b-bad", review: "", ok: "b-ok" };
+// "ok" is the plan's word for a file that is already right; the row says so plainly,
+// because that is the word a person looks for.
+const KIND_LABEL = { ok: "correct" };
+const DECIDED_LABEL = { AI: "AI", you: "you set it", "title card": "title card", "release name": "release name" };
 const ACTIONABLE = ["rename", "split", "join", "aside"];
 
 // -------------------------------------------------------------------- theme
@@ -492,7 +504,7 @@ async function watchJobs() {
 
 function labelJob(kind) {
   return { scan: "Scan", fetch_refs: "Fetch references", refresh_episodes: "Load TVDB episodes",
-    apply: "Apply changes", undo: "Undo", replan: "Rebuild plan", ai_check: "Ask AI", check_files: "Check files", find_releases: "Find releases" }[kind] || kind;
+    apply: "Apply changes", undo: "Undo", ai_check: "Ask AI", check_files: "Check files", find_releases: "Find releases" }[kind] || kind;
 }
 
 function showTab() {
@@ -560,6 +572,7 @@ async function tabPlan(reload = true) {
     state.filter === "actions" ? ACTIONABLE.includes(it.kind) : it.kind === state.filter);
   const applied = plan.status !== "draft";
   const selCount = actionable.filter((it) => it.selected).length;
+  const changedCount = plan.items.filter((it) => it.previous).length;
 
   tab.innerHTML = `<div class="row" style="margin-bottom:10px">
       <div class="filters">${filters.map(([k, l, n]) =>
@@ -569,7 +582,7 @@ async function tabPlan(reload = true) {
       <button class="btn small" id="check-files" title="Decode every file to find damaged ones (glitches, audio drifting out of sync, files cut short)">Check files…</button>
       <button class="btn small" id="sonarr-cmp" title="Check EpisodeID's view of this series' files against Sonarr's">Compare with Sonarr</button>
       <button class="btn small" id="unmon" title="Seasons where every aired episode has a correct file: stop Sonarr searching for or upgrading them">Unmonitor complete seasons…</button>
-      <span class="muted small">Plan #${plan.id} · ${esc(when(plan.created))}${applied ? " · <b>applied</b>" : ""}</span>
+      <span class="muted small" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} · ${esc(when(plan.created))}${changedCount ? ` · <b>${changedCount} changed</b>` : ""}${applied ? " · <b>applied</b>" : ""}</span>
       ${applied ? "" : `<button class="btn primary" id="apply" ${selCount ? "" : "disabled"}>Apply ${selCount} change${selCount === 1 ? "" : "s"}…</button>`}
     </div>
     ${applied ? "" : coverageHtml(plan, state.series)}
@@ -598,6 +611,7 @@ async function tabPlan(reload = true) {
     };
   }
   $$("button.set-ep", tab).forEach((b) => b.onclick = () => setEpisodeDialog(b.dataset.src, b.dataset.cur));
+  $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code));
   $$("button.card-check", tab).forEach((b) => b.onclick = () => cardCheckDialog(b.dataset.src));
   $$(".int-accept", tab).forEach((b) => b.onclick = async (e) => {
     e.preventDefault();
@@ -977,6 +991,112 @@ async function checkFilesDialog() {
   };
 }
 
+// ------------------------------------------------ transcripts & references
+// The dialogue a scan judged a file on, beside one episode's reference, so a
+// person can read the two and settle a doubtful match themselves.
+
+const evMeta = (f) => {
+  const where = f.scope === "full" ? "whole file"
+    : f.sample_start != null
+      ? `${f.scope === "excerpt" ? "excerpt of sample" : "sample"} ${fmtTime(f.sample_start)}–${fmtTime(f.sample_end)}`
+      : f.scope;
+  return `${where} · ${f.words} words`;
+};
+
+async function evidenceDialog(rel, code) {
+  let d;
+  try {
+    d = await api(`/api/series/${state.series.id}/evidence?` +
+      new URLSearchParams({ rel, ...(code ? { code } : {}) }));
+  } catch (e) { fail(e); return; }
+  const f = d.file;
+  const sampled = f.scan_scope === "sample" && f.scope === "full";
+  const box = modal(`
+    <div class="row"><b class="mono" style="font-size:12.5px">${esc(f.rel)}</b>
+      <div class="spacer"></div>
+      ${f.scope !== "full" ? `<button class="btn small" id="ev-full" title="Transcribe and match the whole file — a full read is the like-for-like check for a sample verdict">Read whole file</button>` : ""}
+      <button class="btn small" id="ev-close">Close</button></div>
+    <div class="row small" style="margin:6px 0 10px">
+      ${f.status ? `<span class="badge ${STATUS_BADGE[f.status] || ""}" title="${esc(f.note)}">${esc(f.status)}</span>` : ""}
+      <span class="muted">${esc(f.note || "")}</span></div>
+    <div class="ev-grid">
+      <div class="ev-col"><div class="ev-head"><b>File dialogue</b>
+        <span class="muted small">${esc(evMeta(f))}</span></div>
+        <div class="muted small ev-src" title="${esc(f.source)}">${esc(f.source)}${sampled ? " · the verdict used a sample" : ""}</div>
+        <pre class="ev-text">${esc(f.text || "(no transcript was read for this file)")}</pre></div>
+      <div class="ev-col"><div class="ev-head"><b>Reference</b>
+        <select id="ev-pick"></select></div>
+        <div class="muted small ev-src" id="ev-ref-meta"></div>
+        <pre class="ev-text" id="ev-ref"></pre></div>
+    </div>
+    <div class="ev-score" id="ev-score"></div>`, { sticky: true, wide: true });
+  $("#ev-close", box).onclick = () => closeModal();
+  const fullBtn = $("#ev-full", box);
+  if (fullBtn) fullBtn.onclick = () => {
+    closeModal();
+    startJob("scan", { only: [f.rel], full: true });
+    toast("Re-reading the whole file — the plan updates when it finishes.");
+  };
+  const pick = $("#ev-pick", box);
+  const fill = (next) => {
+    pick.innerHTML = next.episodes.filter((e) => e.has_ref || e.code === next.code)
+      .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.code)}${e.title ? " — " + esc(e.title) : ""}${e.match ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
+    const r = next.reference;
+    const m = next.episodes.find((e) => e.code === next.code)?.match;
+    $("#ev-ref", box).textContent = r ? r.text
+      : "No reference for this episode — fetch references, or upload/paste a transcript in Episodes & references.";
+    $("#ev-ref-meta", box).textContent = r
+      ? `${r.source} · ${r.words} words${m ? ` · scan match ${m.score.toFixed(3)} (${m.confidence || "?"})` : ""}`
+      : "";
+    const lines = [];
+    const nf = next.file;
+    if (next.containment != null) {
+      // Measured on this library: an episode's own reference contains 0.70-0.94 of a
+      // file's word pairs; the closest unrelated reference contains 0.18.
+      const cls = next.containment >= 0.6 ? "b-ok" : next.containment >= 0.35 ? "b-warn" : "b-bad";
+      const side = nf.scope === "full" ? "whole file" : nf.scope === "sample" ? "sample" : "excerpt";
+      lines.push(`<div><span class="badge ${cls}">${(next.containment * 100).toFixed(1)}%</span> ` +
+        `of the ${side}'s word pairs appear in this reference` +
+        `<span class="muted small"> — ${nf.bigrams} pairs${r ? `, ${r.words}-word reference` : ""}</span></div>`);
+    } else if (nf.words) {
+      lines.push(`<div class="muted">Too little dialogue to compare — ${nf.bigrams || 0} word pairs, ` +
+        `${next.bigram_floor} needed.</div>`);
+    }
+    if (next.shared.length) {
+      lines.push(`<div class="wrap-row">shared: ${next.shared.map((w) => `<span class="badge">${esc(w)}</span>`).join(" ")}</div>`);
+    }
+    if (next.ranked.length) {
+      lines.push(`<div class="wrap-row">closest references: ${next.ranked.map((r2) =>
+        `<button class="btn small ev-switch" data-code="${esc(r2.code)}" title="${esc(r2.title || r2.code)}">${esc(r2.code)} ${(r2.containment * 100).toFixed(0)}%</button>`).join(" ")}</div>`);
+    }
+    $("#ev-score", box).innerHTML = lines.join("");
+    $$(".ev-switch", box).forEach((b) => b.onclick = () => load(b.dataset.code));
+  };
+  const load = async (c) => {
+    try {
+      fill(await api(`/api/series/${state.series.id}/evidence?` +
+        new URLSearchParams({ rel, ...(c ? { code: c } : {}) })));
+    } catch (e) { fail(e); }
+  };
+  pick.onchange = () => load(pick.value);
+  fill(d);
+}
+
+// One episode's reference on its own — from the Episodes & references table.
+async function referenceDialog(code) {
+  let d;
+  try { d = await api(`/api/series/${state.series.id}/evidence?code=${encodeURIComponent(code)}`); }
+  catch (e) { fail(e); return; }
+  const r = d.reference;
+  const box = modal(`
+    <div class="row"><b>${esc(code)}${r && r.title ? " — " + esc(r.title) : ""}</b>
+      <div class="spacer"></div><button class="btn small" id="ref-close">Close</button></div>
+    <div class="muted small" style="margin:6px 0 8px">${r ? esc(r.source) + " · " + r.words + " words" : ""}</div>
+    <pre class="ev-text">${esc(r ? r.text : "No reference for this episode.")}</pre>`,
+    { sticky: true, wide: true });
+  $("#ref-close", box).onclick = () => closeModal();
+}
+
 function rowHtml(it, eps, applied) {
   const actionable = ACTIONABLE.includes(it.kind);
   const targets = (it.targets || []).map((t) =>
@@ -989,9 +1109,11 @@ function rowHtml(it, eps, applied) {
   const cur = (it.codes || it.suggested || []).join(" ");
   return `<tr>
     <td class="check">${actionable && !applied ? `<input type="checkbox" class="sel" data-id="${it.id}" ${it.selected ? "checked" : ""}>` : ""}</td>
-    <td><span class="badge ${KIND_BADGE[it.kind]}">${esc(it.kind)}</span>
-      <span class="badge ${STATUS_BADGE[it.status] || ""}">${esc(it.status)}</span>
-      ${it.ai ? '<span class="badge b-ai">AI</span>' : ""}
+    <td><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
+      <span class="badge ${STATUS_BADGE[it.status] || ""}" title="${esc(it.note || "")}">${esc(it.status)}</span>
+      ${it.decided_by && it.decided_by !== "dialogue" ? `<span class="badge ${it.decided_by === "AI" ? "b-ai" : "b-info"}" title="What settled this row${it.decided_confidence ? ` (${Math.round(it.decided_confidence * 100)}% confidence)` : ""}">${esc(DECIDED_LABEL[it.decided_by] || it.decided_by)}${it.decided_by === "AI" && it.decided_confidence ? ` ${Math.round(it.decided_confidence * 100)}%` : ""}</span>` : ""}
+      ${it.previous ? `<span class="badge b-info" title="Changed by the last scan — was ${esc(it.previous.kind)} (${esc(it.previous.status)}), now ${esc(it.kind)} (${esc(it.status)})">changed</span>` : ""}
+      ${it.sample ? `<span class="badge" title="Settled from a sample of the first 10 minutes — open Compare… → Read whole file to check every line">sample</span>` : ""}
       ${it.ref_warning ? '<span class="badge b-warn">check reference</span>' : ""}
       ${it.elimination ? '<span class="badge b-info" title="Settled by what\'s around it: the other files and episodes of the season">by elimination</span>' : ""}
       ${((state.series.file_check || {}).imports || []).some((x) => (it.sources || [it.source]).includes(x.rel)) ? '<span class="badge b-bad" title="Sonarr imported this file recently and its content doesn\'t match its name">new download</span>' : ""}
@@ -1002,7 +1124,7 @@ function rowHtml(it, eps, applied) {
         ${it.cuts.map((c) => c == null ? "auto" : fmtCut(c)).join(", ")}</div>` : ""}
       <div class="muted small">${esc(it.reason || "")}</div></td>
     <td>${segs}${src}</td>
-    <td>${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
+    <td>${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" style="margin-bottom:4px" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
       ${ovr ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">Clear</button>` : ""}`}
       <button class="btn small card-check" data-src="${esc(it.source)}" style="margin-top:4px" title="See what the title-card OCR reads in part of this file">Check title cards…</button>
       ${state.ai && !applied && it.kind !== "ok" && it.text_source && it.text_source !== "none" ? `<button class="btn small ai-check" data-src="${esc(it.source)}" style="margin-top:4px" title="Ask the AI which episode this file's dialogue is, from the TVDB summaries of the likely episodes">Ask AI</button>` : ""}
@@ -1436,6 +1558,19 @@ function seasonCoverage(s) {
     <table style="margin-top:8px"><thead><tr><th>Season</th><th></th><th>References</th><th></th></tr></thead><tbody>${rows}</tbody></table></details>`;
 }
 
+// An episode's match score from the last scan; clicking it opens the file's
+// dialogue beside this episode's reference to check it by reading.
+function matchCell(e) {
+  const m = e.match;
+  if (!m) return `<span class="muted small" title="No dialogue segment named this episode — it has no file, or its row was settled another way (filename, AI, title card)">—</span>`;
+  const cls = m.confidence === "high" ? "b-ok" : "b-warn";
+  const tip = `score ${m.score}${m.margin != null ? ` · margin ${m.margin}` : ""} · ` +
+    `${m.confidence || "?"} confidence · ${m.status || ""}${m.scope === "sample" ? " · sample" : ""}\n${m.source || ""}`;
+  return `<button class="btn small match-open" data-src="${esc(m.source || "")}" data-code="${esc(e.code)}" title="${esc(tip)}">
+      <span class="badge ${cls}" style="pointer-events:none">${m.score.toFixed(3)}</span></button>
+    <div class="muted small">${esc(m.confidence || "")}${m.scope === "sample" ? " · sample" : ""}</div>`;
+}
+
 async function tabEpisodes() {
   const s = state.series;
   const eps = s.episodes || [];
@@ -1447,14 +1582,15 @@ async function tabEpisodes() {
       <div class="spacer"></div>
       <button class="btn small" id="retry">Retry not-found episodes</button>
       <button class="btn small" id="reload-eps">Reload TVDB episode list</button></div>
-    <table><thead><tr><th>Episode</th><th>Title</th><th>Reference</th><th style="width:170px"></th></tr></thead><tbody>
+    <table><thead><tr><th>Episode</th><th>Title</th><th>Match</th><th>Reference</th><th style="width:170px"></th></tr></thead><tbody>
     ${eps.map((e) => `<tr>
       <td class="mono">${esc(e.code)}</td>
       <td>${esc(e.title)}<div class="muted small">${esc(e.aired || "")}</div></td>
+      <td>${matchCell(e)}</td>
       <td>${e.ref ? `<span class="badge b-ok">${esc(e.ref.split(":")[0])}</span> <span class="muted small">${esc(e.ref_note)}</span>` :
         e.miss ? `<span class="badge b-warn">not found</span> <span class="muted small">${esc(e.miss)}</span>` :
         `<span class="muted small">—</span>`}</td>
-      <td><label class="btn small">Upload<input type="file" hidden data-code="${esc(e.code)}" accept=".srt,.ass,.ssa,.vtt,.txt"></label>
+      <td>${e.ref ? `<button class="btn small view-ref" data-code="${esc(e.code)}" title="Read this episode's reference transcript">View</button>` : ""}<label class="btn small">Upload<input type="file" hidden data-code="${esc(e.code)}" accept=".srt,.ass,.ssa,.vtt,.txt"></label>
         <button class="btn small paste-ref" data-code="${esc(e.code)}" data-title="${esc(e.title || "")}">Paste</button>
         ${e.ref || e.miss ? `<button class="btn small refetch" data-code="${esc(e.code)}">Re-fetch</button>` : ""}</td>
     </tr>`).join("")}</tbody></table>`;
@@ -1485,6 +1621,8 @@ async function tabEpisodes() {
     } catch (e) { fail(e); }
   });
   $$("button.paste-ref", tab).forEach((b) => b.onclick = () => pasteRefDialog(b.dataset.code, b.dataset.title));
+  $$("button.view-ref", tab).forEach((b) => b.onclick = () => referenceDialog(b.dataset.code));
+  $$("button.match-open", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code));
   $$("button.refetch", tab).forEach((b) => b.onclick = async () => {
     await api(`/api/series/${s.id}/references/${b.dataset.code}`, { method: "DELETE" }).catch(fail);
     startJob("fetch_refs", { codes: [b.dataset.code] });
@@ -1724,8 +1862,8 @@ async function renderSettings() {
     ${cb("titlecard_enabled", "Enabled")}
     ${f("titlecard_scan_seconds", "Search the first (s)", "How far into each episode to look for the card when its usual position isn't known yet.", "number")}
     ${f("titlecard_fps", "Frames per second", "1 is enough for cards shown for 2+ seconds.")}
-    ${cb("titlecard_vision", "Use a vision model when OCR can't settle a card", "Sends up to 4 frames to the AI endpoint below when OCR read no title card, only part of one, or one that disagrees with both the filename and the dialogue. Needs a vision-capable model (e.g. qwen2.5vl in Ollama).")}
-    ${f("llm_vision_model", "Vision model", "Leave blank to use the AI model below.")}
+    ${cb("titlecard_vision", "Use a vision model when OCR can't settle a card", "Off by default. OCR is always tried first; this sends up to 4 frames to the AI endpoint only when OCR read no title card, only part of one, or one that disagrees with both the filename and the dialogue. It needs a vision-capable model: set <b>Vision model</b> below (e.g. a qwen2.5-vl build in Ollama). If that is blank, the ordinary AI model is used — and a text-only model cannot see the frames. Its answer only supplies the title text; EpisodeID still decides which episode that is.")}
+    ${f("llm_vision_model", "Vision model", "Used only for title-card frames. Blank → the AI model above, which is usually text-only.")}
     ${sel("titlecard_ocr_device", "OCR on", [["auto", "Auto — NVIDIA GPU when available (-cuda image)"], ["cpu", "CPU"]])}
     ${sel("titlecard_hwaccel", "Video decoding", [["auto", "Auto — use a GPU if one is passed to the container"], ["cuda", "NVIDIA (NVDEC)"], ["vaapi", "Intel / AMD (VAAPI, needs /dev/dri)"], ["off", "CPU only"]],
       "Hardware decoding falls back to the CPU automatically if it doesn't work for a file.")}

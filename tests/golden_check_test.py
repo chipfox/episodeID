@@ -13,13 +13,16 @@ UNDECIDABLE = "Season 05/The X-Files - S05E15 - Travelers - HDTV-1080p Proper AV
 golden = {"swaps": {SWAP: "S05E10"}, "undecidable": [UNDECIDABLE]}
 
 
-def item(kind, source, target=None):
+def item(kind, source, target=None, expected=None, evidence=None, status=None):
     return {"kind": kind, "source": source, "reason": "test",
+            "expected": expected or [],
+            "status": status,
+            "segments": [{"code": c, "confidence": "high"} for c in evidence or []],
             "targets": [{"path": target}] if target else []}
 
 
 swap_rename = item("rename", SWAP, "Season 05/x/The X-Files - S05E10 - Chinga - Bluray-1080p x265 Opus 5.1.mkv")
-plain_ok = item("ok", PLAIN)
+plain_ok = item("ok", PLAIN, expected=["S05E12"], evidence=["S05E12"], status="OK")
 undecided_review = item("review", UNDECIDABLE)
 
 good = G.score({"items": [swap_rename, plain_ok, undecided_review]}, golden)
@@ -29,6 +32,26 @@ assert not (good["wrong_ok"] or good["false_renames"] or good["missed_swaps"]), 
 
 left_alone = G.score({"items": [item("ok", SWAP), plain_ok]}, golden)
 assert left_alone["wrong_ok"] == [SWAP], left_alone
+
+# An OK that its own evidence does not support is a wrong OK, not a pass — the
+# failure mode that let a plan mark everything OK and still score 97%.
+unsupported = G.score({"items": [swap_rename,
+                                 item("ok", PLAIN, expected=["S05E12"], evidence=["S05E13"],
+                                      status="OK"),
+                                 undecided_review]}, golden)
+assert [row["rel"] for row in unsupported["wrong_ok"]] == [PLAIN], unsupported
+
+bare = G.score({"items": [swap_rename, item("ok", PLAIN, expected=["S05E12"], status="OK"),
+                          undecided_review]}, golden)
+assert [row["rel"] for row in bare["wrong_ok"]] == [PLAIN], bare
+
+# An `ok` row for an unsettled file is a deferral, judged like a review row.
+deferred_ok = G.score({"items": [swap_rename,
+                                 item("ok", PLAIN, expected=["S05E12"], status="LOW_CONFIDENCE"),
+                                 item("ok", UNDECIDABLE, expected=["S05E15"],
+                                      status="NO_MATCH")]}, golden)
+assert deferred_ok["deferred_correctly"] == [UNDECIDABLE], deferred_ok
+assert deferred_ok["deferred_wrongly"] == [PLAIN], deferred_ok
 
 wrong_swap = G.score({"items": [item("rename", SWAP,
                                      "Season 05/x/The X-Files - S05E09 - Schizogeny - Bluray-1080p x265 Opus 5.1.mkv"),

@@ -9,6 +9,10 @@ W = Path(os.environ.get("EPID_TEST_DIR", "/tmp/epid_auth"))
 if W.exists():
     shutil.rmtree(W)
 os.environ.update(MEDIA_ROOT=str(W / "media"), CONFIG_DIR=str(W / "config"), CACHE_DIR=str(W / "cache"))
+# The deployment may export Sonarr settings; env beats stored settings, so clear them
+# or this test would be asserting against the homelab's real key.
+os.environ.pop("SONARR_URL", None)
+os.environ.pop("SONARR_API_KEY", None)
 (W / "media").mkdir(parents=True)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import httpx  # noqa: E402
@@ -72,7 +76,7 @@ assert s["colon_replacement"] == "space_dash" and s["multi_episode_style"] == "d
 assert s["replace_illegal_characters"] is False and s["season_folder_format"] == "Season {season}"
 assert s["naming_format"] == NAMING["standardEpisodeFormat"] and "naming_format" in r["changed"]
 assert any("{-Release Group}" in n for n in r["notes"]) and any("Naruto" in n and "anime" in n for n in r["notes"])
-assert all(h == {"X-Api-Key": "k"} for _u, h in calls)
+assert all(h == {"X-Api-Key": "k"} for _u, h in calls), calls
 assert note and "absolute" in note, note
 eps = [{"season": 1, "episode": 1, "title": "Magic Xylophone"}, {"season": 1, "episode": 2, "title": "Hospital"}]
 got = planner.episode_filename("Bluey", eps, ".mkv", "old WEBDL-1080p.mkv", s, 2018)

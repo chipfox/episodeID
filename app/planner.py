@@ -353,7 +353,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 7
+PLAN_VERSION = 10
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -599,9 +599,28 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         sample_only = (f.get("scope") == "sample" or
                        any(sg.get("scope") == "sample" for sg in f.get("segments") or []))
         manually_set = any(sg.get("override") for sg in f.get("segments") or [])
+        segs = f.get("segments") or []
+        # What actually settled this row. A full read the matcher could not settle is
+        # decided by the AI's answer, and saying so is the difference between "the
+        # dialogue agrees" and "the matcher was stuck and something else decided".
+        strengths = {c[2] for c in chosen}
+        ai_conf = max((float(sg["llm"]["confidence"]) for sg in segs if sg.get("llm")),
+                      default=None)
+        if "manual" in strengths:
+            decided_by = "you"
+        elif "ai" in strengths:
+            decided_by = "AI"
+        elif any(sg.get("title_card") for sg in segs):
+            decided_by = "title card"
+        elif any(sg.get("evidence") == "release name" for sg in segs):
+            decided_by = "release name"
+        else:
+            decided_by = "dialogue"
         base = {"source": rel, "status": f["status"], "note": f.get("note", ""),
                 "text_source": f.get("text_source"), "expected": f.get("expected") or [],
-                "segments": f.get("segments") or [], "selected": False,
+                "segments": segs, "selected": False,
+                "evidence": f.get("evidence"),
+                "decided_by": decided_by, "decided_confidence": ai_conf,
                 "scope": "sample" if sample_only else (f.get("scope") or "full"),
                 "sample": sample_only}
 
@@ -626,17 +645,9 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 else:
                     reason = (f"Sample only ({where}) — {', '.join(suggested) or 'no candidate'} "
                               "is a suggestion, not proof of the whole file. Check it before renaming.")
-                ai = f.get("ai_code")
-                ai_pct = f"{float(f.get('ai_confidence') or 0):.0%}"
-                if ai and ai not in ("NO_MATCH", "LOW_CONFIDENCE"):
-                    reason += f" — AI suggests {ai} ({ai_pct}); it never renames by itself."
-                elif ai == "LOW_CONFIDENCE":
-                    reason += f" — the AI's best guess was too weak ({ai_pct}), so it was ignored."
-                elif ai == "NO_MATCH":
-                    reason += " — the AI found no candidate that fits."
-                elif f.get("reference_conflict"):
-                    reason += (f" — not asked: {'/'.join(f['reference_conflict'])} shares this "
-                               "episode's reference transcript.")
+                if f.get("reference_conflict"):
+                    reason += (f" — {'/'.join(f['reference_conflict'])} shares this episode's "
+                               "reference transcript, so one text cannot settle either.")
                 if f.get("story_pair_overlap"):
                     ov = f["story_pair_overlap"]
                     reason += (f" — its reference is {ov['similarity']:.0%} the same as {ov['with']}'s "
@@ -644,9 +655,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                                "whole file can pick the part; the filename has to decide.")
                 items.append({**base, "kind": "review", "sample": True,
                               "reason": reason,
-                              "suggested": suggested,
-                              "ai": ({"code": ai, "confidence": f.get("ai_confidence")}
-                                     if ai else None)})
+                              "suggested": suggested})
                 continue
 
         usable = [c for c in chosen if c[2] not in ("low", "provisional")]

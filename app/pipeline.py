@@ -8,14 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import autocheck
-from . import adjudication, db, decision, evidence, fandom, llm, titlecard, tvdb
+from . import db, evidence, fandom, llm, titlecard, tvdb
 from .config import get_settings
 from .executor import (apply_plan, migrate_legacy_backup, sonarr_rescan, sonarr_series_type_note,
                        undo_apply)
 from .jobs import Cancelled, handler
-from .matcher import Matcher, classify, parse_filename_episodes
-from .media_text import (cached_dialogue, detect_language, duration, get_dialogue, probe,
-                         sample_dialogue)
+from .matcher import Matcher, classify, parse_filename_episodes, promote
+from .media_text import (cached_dialogue, detect_language, dialogue_text, duration, get_dialogue,
+                         probe, sample_dialogue)
 from .planner import build_plan, list_videos
 from .references import (SAME_EPISODE_SCORE, detect_fandom_wiki, ep_code, load_refs, norm_title,
                          refresh_references, renumber_references, repair_reference_conflicts,
@@ -74,7 +74,10 @@ def _ensure_episodes(series: dict, ctx, force: bool = False,
                 "you set by hand moved with them.")
     ctx.log(f"TVDB: {len(eps)} episodes in "
             f"{len({e['season'] for e in eps if e['season'] > 0})} seasons.")
-    return db.get_series(series["id"])
+    fresh = db.get_series(series["id"])
+    if fresh is None:
+        raise RuntimeError("Series not found")
+    return fresh
 
 
 def _renumbered(old_eps: list[dict], new_eps: list[dict]) -> dict[str, str]:
@@ -164,7 +167,10 @@ def _find_wiki(series: dict, ctx, force: bool = False) -> dict:
     else:
         return series
     db.update_series(series["id"], options=opts)
-    return db.get_series(series["id"])
+    fresh = db.get_series(series["id"])
+    if fresh is None:
+        raise RuntimeError("Series not found")
+    return fresh
 
 
 @handler("fetch_refs")
@@ -207,6 +213,12 @@ def _aired(e: dict) -> bool:
     return not e.get("aired") or e["aired"] <= datetime.now(timezone.utc).date().isoformat()
 
 
+def _evidence(res: dict) -> dict | None:
+    """The matcher's evidence block, when this result carries one."""
+    value = res.get("evidence")
+    return value if isinstance(value, dict) else None
+
+
 def _sample_eligible(video: Path, expected: list[str], eps: dict,
                      runtime_minutes: float | None, settings: dict) -> bool:
     """Only single-episode files of normal runtime get the sample path.
@@ -223,7 +235,7 @@ def _sample_eligible(video: Path, expected: list[str], eps: dict,
         return False
     if dur <= 0:
         return False
-    if dur <= float(settings["decision_sample_seconds"]) * 0.8:
+    if dur <= float(settings["sample_seconds"]) * 0.8:
         return False  # the file is short enough to read whole
     runtime = float(eps[expected[0]].get("runtime") or runtime_minutes or 0)
     if runtime and dur > runtime * 60 * 1.55:
@@ -312,7 +324,7 @@ def _scored_sample_window(video: Path, matcher: Matcher, start: float, duration:
                           ctx=None) -> dict:
     data = sample_dialogue(video, ctx, allow_whisper=True, start=start, duration=duration)
     cues = data.get("cues") or []
-    text = adjudication.dialogue_text(cues, limit=20000)
+    text = dialogue_text(cues, limit=20000)
     language = detect_language(cues, settings["language"]) if len(text.split()) >= 40 else None
     if language:
         return {"start": float(data.get("sample_start", start)),
@@ -506,11 +518,11 @@ def _apply_sample_aggregate(f: dict, agg: dict, window_seconds: float) -> None:
 
 def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict], matcher: Matcher,
                               eps: dict, refs: dict, settings: dict, ctx,
-                              lex: evidence.Lexicon | None = None) -> None:
-    base_start = float(settings["decision_sample_start"])
-    window = float(settings["decision_sample_seconds"])
-    max_windows = max(1, int(settings["decision_sample_max_windows"]))
-    required = max(1, int(settings["decision_mismatch_windows"]))
+                              lex: evidence.ReferenceConflicts | None = None) -> None:
+    base_start = float(settings["sample_start"])
+    window = float(settings["sample_seconds"])
+    max_windows = max(1, int(settings["sample_max_windows"]))
+    required = max(1, int(settings["sample_mismatch_windows"]))
     todo = [f for f in files if f.get("scope") == "sample" and f.get("status") != "OK"]
     if not todo:
         return
@@ -579,8 +591,8 @@ def _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx):
             dlg = None
             if fast and not params.get("full") and _sample_eligible(v, expected, eps, runtime_min, s):
                 dlg = sample_dialogue(v, ctx, allow_whisper=params.get("whisper", True),
-                                      start=s["decision_sample_start"],
-                                      duration=s["decision_sample_seconds"])
+                                      start=s["sample_start"],
+                                      duration=s["sample_seconds"])
                 if dlg.get("scope") == "sample" and dlg.get("cues"):
                     ctx.log(f"  sampled {rel.rsplit('/', 1)[-1]}: {dlg['source']} "
                             f"({dlg['duration'] / 60:.1f} min)")
@@ -612,6 +624,33 @@ def _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx):
     return read
 
 
+def _mark_changes(items: list, prev_items: list, ctx) -> int:
+    """Mark plan rows whose verdict differs from the last plan, and say so in the log.
+
+    A scan that settles a row is invisible in the plan itself: the row after the scan
+    looks exactly like one that was always correct. Recording the previous verdict is
+    what lets the UI show "this changed, and here is what decided it".
+    """
+    prev = {it["source"]: it for it in prev_items or [] if it.get("source")}
+    changed = 0
+    for it in items:
+        src = it.get("source")
+        if not src or len(it.get("sources") or []) > 1 or src not in prev:
+            continue
+        old = prev[src]
+        if (old.get("kind"), old.get("status")) == (it.get("kind"), it.get("status")):
+            continue
+        it["previous"] = {"kind": old.get("kind"), "status": old.get("status")}
+        changed += 1
+        how = f" — {it['decided_by']} decided" if it.get("kind") == "ok" and \
+            it.get("decided_by") not in (None, "dialogue") else ""
+        ctx.log(f"Changed: {src} — {old.get('kind')} ({old.get('status')}) → "
+                f"{it.get('kind')} ({it.get('status')}){how}: {it.get('reason') or ''}")
+    if changed:
+        ctx.log(f"{changed} file(s) changed since the last plan — marked 'changed' in the plan.")
+    return changed
+
+
 @handler("scan")
 def job_scan(ctx, params):
     s = get_settings()
@@ -624,7 +663,7 @@ def job_scan(ctx, params):
             raise
         except Exception as e:  # noqa: BLE001 — scan with what there is
             ctx.log(f"Couldn't fetch references ({e}); scanning with the ones already here.")
-        series = db.get_series(series["id"])
+        series = db.get_series(series["id"]) or _series(ctx)
     root = Path(series["path"])
     opts = series.get("options") or {}
     include_specials = bool(opts.get("include_specials"))
@@ -649,13 +688,13 @@ def job_scan(ctx, params):
         only = set(params["only"])
         videos = [v for v in videos if str(v.relative_to(root)) in only]
     ctx.log(f"Scanning {len(videos)} video files in {root}")
-    fast = bool(s["decision_fast_path"]) and not params.get("full")
+    fast = bool(s["sampling_fast_path"]) and not params.get("full")
     runtime_min = _runtime_minutes(eps)
     if params.get("full"):
         ctx.log("Full-file matching requested for the selected files: the whole transcript "
                 "is read, so a match covers the entire episode, not a sample.")
     elif fast:
-        ctx.log(f"Fast path: sampling the first {int(s['decision_sample_seconds']) // 60} min "
+        ctx.log(f"Fast path: sampling the first {int(s['sample_seconds']) // 60} min "
                 "of single-episode files; multi-episode and long files use the full matcher.")
     # 1. Read every file's dialogue (cached unless new or replaced).
     read = _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx)
@@ -674,10 +713,10 @@ def job_scan(ctx, params):
     if matcher and len(refs) < 5:
         ctx.log(f"Only {len(refs)} reference(s): a dialogue match only counts when it's plainly that episode.")
     lex = None
-    if refs and (fast or decision.available()):
+    if refs:
         try:
-            lex = evidence.Lexicon(eps, refs, story=lambda code: _story(eps, code),
-                                   conflict_similarity=float(s["decision_conflict_similarity"]))
+            lex = evidence.ReferenceConflicts(refs, story=lambda code: _story(eps, code),
+                                              conflict_similarity=float(s["reference_duplicate_similarity"]))
         except Exception as e:  # noqa: BLE001 — the scan works without it, just less precisely
             ctx.log(f"Reference check: couldn't compare references ({e}); continuing without it.")
     if lex and lex.conflict_pairs():
@@ -706,6 +745,8 @@ def job_scan(ctx, params):
             continue
         res = matcher.match_file(dlg["cues"], dlg["duration"]) if matcher and dlg["cues"] \
             else {"segments": [], "whole": []}
+        res["segments"] = promote(expected, res["segments"], _evidence(res),
+                                  dlg["duration"])
         _discount_unreferenced(res["segments"], expected, dlg["duration"], refs)
         res["segments"] = _story_parts(res["segments"], expected, eps, dlg["duration"])
         sampled = dlg.get("scope") == "sample"
@@ -715,7 +756,8 @@ def job_scan(ctx, params):
             # untracked suggestion. Weak samples go to review below.
             for sg in res["segments"]:
                 sg["scope"] = "sample"
-        status, note = classify(expected, res["segments"], dlg["source"])
+        status, note = classify(expected, res["segments"], dlg["source"],
+                                _evidence(res))
         if sampled:
             if status == "OK":
                 note = f"Sample of {dlg['duration'] / 60:.0f} min — matches the filename"
@@ -729,8 +771,9 @@ def job_scan(ctx, params):
                  "sample_start": dlg.get("sample_start"),
                  "sample_end": dlg.get("sample_end"),
                  "file_duration": dlg.get("file_duration"),
-                 "sample_text": adjudication.dialogue_text(dlg["cues"]) if sampled else "",
+                 "sample_text": dialogue_text(dlg["cues"], limit=20_000) if sampled else "",
                  "segments": res["segments"], "whole": res["whole"],
+                 "evidence": res.get("evidence"),
                  "status": status, "note": note}
         if dlg.get("language") and not sampled:
             entry["language"] = dlg["language"]
@@ -743,6 +786,10 @@ def job_scan(ctx, params):
             pair = lex.story_pair_for(expected[0])
             if pair:
                 entry["story_pair_overlap"] = {"with": pair[0], "similarity": pair[1]}
+        if lex is not None and len(expected) == 1 and status in ("NO_MATCH", "LOW_CONFIDENCE"):
+            twins = lex.conflicting(expected[0])
+            if twins:
+                entry["reference_conflict"] = twins[:2]
         files.append(entry)
         det = " + ".join(f"{sg['code']}{'' if sg['confidence'] == 'high' else '?'}"
                          for sg in res["segments"]) or "-"
@@ -752,7 +799,7 @@ def job_scan(ctx, params):
                 ctx.log(f"{'':<16}   {sg['code']}? {sg['why']}")
 
     videos_by_rel = {rel: v for v, rel, *_ in read}
-    if fast and s.get("decision_sample_expand") and matcher:
+    if fast and s.get("sample_expand") and matcher:
         _sample_confirmation_pass(videos_by_rel, files, matcher, eps, refs, s, ctx, lex)
 
     scanned = [f for f in files if f.get("scope") != "sample"]
@@ -768,8 +815,14 @@ def job_scan(ctx, params):
     if llm.available() and scanned:
         _llm_pass(series, scanned, eps, refs, ctx)
 
-    if decision.available() and any(f.get("scope") == "sample" for f in files):
-        _decision_pass(series, files, eps, ctx, lex)
+    if s["sampling_full_escalate"] and matcher:
+        # Still undecided after the samples? Read the whole file once (cached like
+        # any full read) and match every line. The AI fallback then gets the files
+        # this could not settle either.
+        escalated = _full_escalation_pass(series, files, matcher, eps, refs, ctx, lex,
+                                          videos_by_rel)
+        if escalated and llm.available():
+            _llm_pass(series, escalated, eps, refs, ctx)
 
     if params.get("only"):
         # Only some files were scanned: the rest keep what the last scan found (if they're
@@ -786,8 +839,19 @@ def job_scan(ctx, params):
         counts[f["status"]] = counts.get(f["status"], 0) + 1
     scan = {"files": files, "counts": counts, "reference_count": len(refs)}
     scan_id = db.add_scan(series["id"], scan)
-    items = build_plan(db.get_series(series["id"]), db.latest_scan(series["id"])["results"])
+    series_now = db.get_series(series["id"])
+    fresh_scan = db.latest_scan(series["id"])
+    assert series_now is not None and fresh_scan is not None
+    items = build_plan(series_now, fresh_scan["results"])
+    prev_plan = db.latest_plan(series["id"]) or {}
+    _mark_changes(items, prev_plan.get("items") or [], ctx)
     plan_id = db.add_plan(series["id"], scan_id, items)
+    kept = db.prune_history(series["id"])
+    expired = db.prune_jobs()
+    if kept["scans"] or kept["plans"] or expired:
+        db.vacuum()
+        ctx.log(f"History: kept the last {db.HISTORY_SCANS} scans and plans — removed "
+                f"{kept['scans']} scan(s), {kept['plans']} plan(s), {expired} old job(s).")
     ctx.log("Summary: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
     if params.get("imported"):
         autocheck.note_imports(series, [f for f in files if f["rel"] in set(params["only"])], ctx)
@@ -897,7 +961,8 @@ def _release_name_pass(series: dict, files: list[dict], ctx) -> None:
                               "score": 0, "confidence": "high", "alternatives": [], "evidence": "release name",
                               "why": f"Sonarr imported it from '{name}', which carries the title"}
                              for i, c in enumerate(exp)]
-            f["status"], f["note"] = classify(exp, f["segments"], f.get("text_source") or "none")
+            f["status"], f["note"] = classify(exp, f["segments"],
+                                              f.get("text_source") or "none", f.get("evidence"))
             f["note"] = f"confirmed by its release name ({name})"
             used += 1
         elif not strong:
@@ -905,7 +970,8 @@ def _release_name_pass(series: dict, files: list[dict], ctx) -> None:
             f["segments"] = [{"start": 0, "end": dur, "code": code, "score": 0, "confidence": "low",
                               "alternatives": [], "evidence": "release name",
                               "why": f"Sonarr imported it from '{name}', which names {code}"}]
-            f["status"], _n = classify(exp, f["segments"], f.get("text_source") or "none")
+            f["status"], _n = classify(exp, f["segments"],
+                                       f.get("text_source") or "none", f.get("evidence"))
             f["note"] = f"its release name ({name}) names {code}"
             used += 1
     if used:
@@ -1211,7 +1277,8 @@ def _apply_title_cards(f: dict, cards: list[dict], runtimes: dict | None = None,
         segs = merged
     f["segments"] = segs
     f.pop("hold", None)
-    f["status"], note = classify(expected, segs, f.get("text_source") or "none")
+    f["status"], note = classify(expected, segs, f.get("text_source") or "none",
+                                 f.get("evidence"))
     detected = {sg["code"] for sg in segs}
     if f["status"] == "MISMATCH" and expected and detected < set(expected):
         # Cards confirm part of the filename and nothing contradicts the rest: there is
@@ -1282,7 +1349,8 @@ def _title_card_swaps(files: list[dict], ctx) -> None:
                       why=f"the title cards in this file and in {Path(b['rel']).name} each name "
                           "the other's episode — the two files are swapped")
             sg.pop("title_conflict", None)
-            a["status"], _ = classify(a["expected"], a["segments"], a.get("text_source") or "none")
+            a["status"], _ = classify(a["expected"], a["segments"],
+                                      a.get("text_source") or "none", a.get("evidence"))
             a["note"] = f"swapped with {Path(b['rel']).name} (title cards)"
             done.add(a["rel"])
         ctx.log(f"Title cards: {f['rel']} and {g['rel']} each show the other's title — swapped.")
@@ -1516,7 +1584,13 @@ def _vision_reason(f: dict, cards: list[dict], first_end: float) -> tuple[str | 
 
 def _vision_check(video: Path, f: dict, cards: list[dict], index, series_name: str, ctx) -> list[dict]:
     """Ask the vision model about the first episode's card when OCR couldn't settle it.
-    Its answer replaces OCR's read of that card only when it reads a whole title."""
+
+    Only reached when `llm.vision_available()` is true — `titlecard_vision` on and an
+    AI endpoint configured — and only for the first episode's card, because that is
+    where a splash screen or the series logo most often fools OCR. The model returns
+    a title string, not an episode; `_apply_title_cards` matches it through the same
+    TitleIndex as an OCR read, so a wrong or missing answer changes nothing.
+    """
     full_len = float(get_settings()["titlecard_scan_seconds"])
     reason, doubted = _vision_reason(f, cards, full_len)
     if not reason:
@@ -1550,21 +1624,68 @@ def _vision_check(video: Path, f: dict, cards: list[dict], index, series_name: s
     return sorted([card] + keep, key=lambda c: c["time"])
 
 
-def _decision_pass(series, files, eps, ctx, lex=None):
-    """Ask Laya only about sample-scoped files. Its choice stays provisional."""
+def _full_escalation_pass(series, files, matcher, eps, refs, ctx, lex, videos_by_rel):
+    """Files the samples left undecided (LOW_CONFIDENCE / NO_MATCH) get one
+    automatic full read: the whole transcript is matched again. A file whose
+    reference is a near-duplicate of another episode's is skipped — no transcript
+    length settles that pair. Returns the files that were re-read, so the AI
+    fallback can pick up whatever the full read could not settle either."""
     todo = [f for f in files if f.get("scope") == "sample"
-            and f.get("status") not in ("OK", "MISMATCH") and not f.get("language")]
+            and f["status"] in ("LOW_CONFIDENCE", "NO_MATCH")
+            and not f.get("language") and not f.get("reference_conflict")]
     if not todo:
-        return
-    ctx.log(f"Decision model: asking {get_settings()['decision_model']} about {len(todo)} "
-            "sampled file(s) the matcher could not settle")
+        return []
+    ctx.log(f"Full re-read: {len(todo)} file(s) still undecided after the samples — reading "
+            "the whole file and deciding again on the complete transcript")
+    re_read = []
     for n, f in enumerate(todo):
         ctx.check_cancel()
-        ctx.progress(n / len(todo), f"Decision: {Path(f['rel']).name}")
-        verdict = adjudication.adjudicate(series, f, eps, ctx, lexicon=lex)
-        if verdict is not None and ctx:
-            ctx.log(f"  decision: {Path(f['rel']).name} → {verdict.get('code') or 'unknown'} "
-                    f"({float(verdict.get('confidence') or 0):.0%})")
+        ctx.progress(n / max(1, len(todo)), f"Full re-read: {Path(f['rel']).name}")
+        v = videos_by_rel.get(f["rel"])
+        if v is None:
+            continue
+        try:
+            dlg = get_dialogue(v, ctx)
+        except Exception as e:  # noqa: BLE001 — a failed read keeps the sample verdict
+            ctx.log(f"  {f['rel']}: full re-read failed ({e}); keeping the sample verdict")
+            continue
+        if dlg.get("language"):
+            f["language"] = dlg["language"]
+            f["status"] = "NO_MATCH"
+            f["note"] = (f"Full re-read after a weak sample — the dialogue is "
+                         f"{dlg['language']}, not {get_settings()['language']} — it cannot be "
+                         "matched against the references")
+            ctx.log(f"  full re-read: {f['rel']} — the dialogue is {dlg['language']}, not "
+                    "the reference language; nothing more to ask")
+            continue
+        re_read.append(f)
+        cues = dlg.get("cues") or []
+        res = matcher.match_file(cues, dlg["duration"]) if cues \
+            else {"segments": [], "whole": []}
+        res["segments"] = promote(f.get("expected") or [], res["segments"],
+                                  _evidence(res), dlg["duration"])
+        _discount_unreferenced(res["segments"], f.get("expected") or [], dlg["duration"],
+                               refs or {})
+        res["segments"] = _story_parts(res["segments"], f.get("expected") or [], eps,
+                                       dlg["duration"])
+        status, note = classify(f.get("expected") or [], res["segments"], dlg["source"],
+                                _evidence(res))
+        f.update({"scope": "full", "duration": dlg["duration"], "text_source": dlg["source"],
+                  "segments": res["segments"], "whole": res["whole"],
+                  "evidence": _evidence(res), "status": status,
+                  "full_reread": True,
+                  "note": "Full re-read after a weak sample — "
+                          + (note or "the whole file matches the filename")})
+        f.pop("story_pair_overlap", None)
+        if (lex is not None and len(f.get("expected") or []) == 1
+                and status in ("NO_MATCH", "LOW_CONFIDENCE")):
+            pair = lex.story_pair_for(f["expected"][0])
+            if pair:
+                f["story_pair_overlap"] = {"with": pair[0], "similarity": pair[1]}
+        det = " + ".join(f"{sg['code']}{'' if sg['confidence'] == 'high' else '?'}"
+                         for sg in res["segments"]) or "-"
+        ctx.log(f"  full re-read: {f['rel']}  →  {det} ({status})")
+    return re_read
 
 
 def _llm_pass(series, files, eps, refs, ctx):
@@ -1644,9 +1765,19 @@ def job_ai_check(ctx, params):
     if not scan:
         raise RuntimeError("Scan the series first.")
     files = [dict(f) for f in scan["results"]["files"]]
-    f = next((x for x in files if x["rel"] == params.get("source")), None)
-    if not f:
-        raise RuntimeError("That file isn't in the last scan — scan again.")
+    source = str(params.get("source") or "")
+    f = next((x for x in files if x["rel"] == source), None)
+    if f is None:
+        # A plan row can outlive a rename (an apply, or a rename made outside EpisodeID):
+        # fall back to the same file name, but only when that file really is there.
+        name = Path(source).name
+        f = next((x for x in files if Path(x["rel"]).name == name
+                  and (Path(series["path"]) / x["rel"]).is_file()), None)
+        if f is not None:
+            ctx.log(f"Using {f['rel']} — that file was renamed since the scan.")
+    if f is None:
+        raise RuntimeError("That file isn't in the last scan any more (renamed or replaced) "
+                           "— scan the series, then try again.")
     eps = {ep_code(e["season"], e["episode"]): e for e in series["episodes"]}
     refs = load_refs(series["tvdb_id"])
     claimed = {sg["code"] for g in files if g is not f for sg in g.get("segments") or [] if sg["confidence"] == "high"}
@@ -1665,17 +1796,6 @@ def job_ai_check(ctx, params):
         if key(it) in prev and it["source"] != f["rel"]:
             it["selected"] = prev[key(it)].get("selected", it["selected"])
     return {"plan_id": db.add_plan(series["id"], scan_id, items)}
-
-
-@handler("replan")
-def job_replan(ctx, params):
-    series = _series(ctx)
-    scan = db.latest_scan(series["id"])
-    if not scan:
-        raise RuntimeError("Scan the series first.")
-    items = build_plan(series, scan["results"])
-    plan_id = db.add_plan(series["id"], scan["id"], items)
-    return {"plan_id": plan_id}
 
 
 def _plan_after_apply(series: dict, plan: dict, ctx) -> int | None:
@@ -1770,7 +1890,8 @@ def _reclassified(f: dict, root: Path) -> dict:
     except OSError:
         pass
     f.pop("hold", None)
-    f["status"], note = classify(f["expected"], f.get("segments") or [], f.get("text_source") or "none")
+    f["status"], note = classify(f["expected"], f.get("segments") or [],
+                                 f.get("text_source") or "none", f.get("evidence"))
     if f.get("renamed_from"):
         f["note"] = f"renamed from {Path(f['renamed_from']).name}"
     elif f.get("split_from"):

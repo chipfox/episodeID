@@ -102,6 +102,18 @@ form.settings legend { font-weight: 600; padding: 0 6px; }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: flex-start; justify-content: center; z-index: 20; padding: 6vh 16px; }
 .modal.hidden { display: none; }
 .modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; width: min(760px, 100%); max-height: 86vh; overflow: auto; padding: 20px; }
+.modal-box.wide { width: min(1180px, 100%); }
+.ev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: stretch; }
+.ev-col { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.ev-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; min-height: 24px; }
+.ev-head select { flex: 1; max-width: 260px; font: inherit; font-weight: 400; padding: 2px 4px; }
+.ev-src { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-text { margin: 0; padding: 10px 12px; background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; flex: 1 1 auto; min-height: 140px; max-height: 52vh; overflow: auto;
+  white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+.ev-score { display: flex; flex-direction: column; gap: 6px; font-size: 12px; margin-top: 10px; }
+.wrap-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+@media (max-width: 820px) { .ev-grid { grid-template-columns: 1fr; } .ev-text { max-height: 40vh; } }
 .list { border: 1px solid var(--border); border-radius: 8px; max-height: 380px; overflow: auto; }
 .list .item { padding: 8px 12px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; gap: 10px; align-items: center; }
 .list .item:hover { background: var(--panel-2); }

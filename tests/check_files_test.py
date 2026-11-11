@@ -57,6 +57,9 @@ for k, v in st.items():
 assert got == {ep(1).name: "ok", ep(2).name: "bad", ep(3).name: "bad", ep(4).name: "warn"}, got
 assert "cut short" in st["Season 1/" + ep(3).name]["summary"]
 assert "lengths differ" in st["Season 1/" + ep(4).name]["summary"]
+# A short audio track is a mismatch, not a truncated file: mapping both streams in one
+# ffmpeg pass stopped at the shortest stream and called this file damaged.
+assert "cut short" not in st["Season 1/" + ep(4).name]["summary"], st["Season 1/" + ep(4).name]
 assert st["Season 1/" + ep(2).name]["errors"] >= integrity.BAD_ERRORS
 print("PASS (problems found)")
 
