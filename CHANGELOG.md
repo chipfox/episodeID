@@ -16,10 +16,11 @@ Changelog; release image tags identify their source commit.
   release, so a sidecar must never be able to turn a multi-part file into an
   automatic OK. Verified rows carry the `parts` evidence strength and
   `decided_by: "parts"`; a file named for one part while covering three is renamed
-  to the combined name instead of going to review. `PLAN_VERSION` is 11, and
+  to the combined name instead of going to review. `PLAN_VERSION` is 12, and
   `tools/golden_check.py` judges a `parts` row by its segments rather than treating
-  its low score as a deferral. Pinned by `tests/parts_verify_test.py` (6 cases,
-  including a sidecar negative).
+  its low score as a deferral. A parts row keeps its real `LOW_CONFIDENCE` status but
+  its note says why the score stays low, so the badge and the reason agree.
+  Pinned by `tests/parts_verify_test.py` (6 cases, including a sidecar negative).
 
 ### Removed
 - **Dead code with no caller anywhere:** `media_text.has_image_subs()` and
@@ -43,6 +44,14 @@ Changelog; release image tags identify their source commit.
   from 1,336 to 1,178 lines.
 
 ### Fixed
+- **S09E02's reference was the other half's subtitle.** The cached OpenSubtitles
+  record (id 1836471) is named for S09E02 but its text is part 1's dialogue: 0.89
+  bigram containment with the S09E01 file, 0.17 with its own. The pair therefore
+  matched one text twice and the plan could not settle either file. It was replaced
+  with candidate 1835344, which the S09E02 file's own parakeet transcript supports
+  at 0.85 (0.15 against S09E01); the old file is kept as
+  `S09E02.json.bak-part1-20261111-125905`. Both files now match their own references
+  at high confidence (0.57 / 0.71), and the live golden check is 217/217.
 - **A complete sample was labelled "excerpt".** A scan stores the whole sample window
   now, so the cached sample and the stored text are the same length and the `>` check
   never fired; `best_dialogue` now treats an equal-length cache as the sample (`>=`) and

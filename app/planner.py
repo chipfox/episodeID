@@ -353,7 +353,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 11
+PLAN_VERSION = 12
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -665,7 +665,10 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             decided_by = "release name"
         else:
             decided_by = "dialogue"
-        base = {"source": rel, "status": f["status"], "note": f.get("note", ""),
+        base = {"source": rel, "status": f["status"],
+                "note": (f"Parts' references overlap, so the scores stay low; its own transcript "
+                         f"covers {', '.join(c[1] for c in chosen)} in order"
+                         if "parts" in strengths else f.get("note", "")),
                 "text_source": f.get("text_source"), "expected": f.get("expected") or [],
                 "segments": segs, "selected": False,
                 "evidence": f.get("evidence"),
