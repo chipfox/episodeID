@@ -5,6 +5,22 @@ Changelog; release image tags identify their source commit.
 
 ## [Unreleased] — 2026-11-11
 
+### Added
+- **Multi-part files verify themselves from their own audio.** When one file holds
+  two or three parts of a story, the parts' reference transcripts overlap and no
+  score can tell the parts apart — but the shape can. `planner._parts_complete()`
+  accepts the segments when each part owns a substantial, ordered, non-overlapping
+  span of the runtime, the file is about as long as the parts together, and the text
+  came from the file itself (`remote …` ASR or `embedded …`). Sidecars are excluded
+  by contract: a third party can drop in a subtitle that describes a different
+  release, so a sidecar must never be able to turn a multi-part file into an
+  automatic OK. Verified rows carry the `parts` evidence strength and
+  `decided_by: "parts"`; a file named for one part while covering three is renamed
+  to the combined name instead of going to review. `PLAN_VERSION` is 11, and
+  `tools/golden_check.py` judges a `parts` row by its segments rather than treating
+  its low score as a deferral. Pinned by `tests/parts_verify_test.py` (6 cases,
+  including a sidecar negative).
+
 ### Removed
 - **Dead code with no caller anywhere:** `media_text.has_image_subs()` and
   `IMAGE_SUB_CODECS` (nothing ever looked for image-based subtitles), `GET /api/guess`

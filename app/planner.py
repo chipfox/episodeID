@@ -353,7 +353,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 10
+PLAN_VERSION = 11
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -527,6 +527,50 @@ def _eliminate(items, eps, root, layout, s, series_name, year) -> None:
                              f"file is {code} (the evidence for this file alone wasn't enough)")
 
 
+def _parts_complete(f: dict, eps: dict) -> bool:
+    """Does this file's own text prove it holds several whole parts?
+
+    Two-part stories are often stored as one file, and cartoon episodes are often
+    two or three segments in one file. When the references for the parts overlap,
+    no score can tell the parts apart, but the geometry can: each part must own a
+    substantial, ordered span of the runtime, and the file must be about as long as
+    the parts together. Only text read from the file itself counts — embedded
+    subtitles or ASR. A sidecar added by a third party may describe a different
+    release (or nothing at all), so it can never prove what a file contains.
+    """
+    source = str(f.get("text_source") or "")
+    if not source.startswith(("remote ", "embedded ")) or f.get("scope") == "sample":
+        return False
+    segs = f.get("segments") or []
+    if len(segs) < 2 or any(sg.get("override") or sg.get("scope") == "sample" for sg in segs):
+        return False
+    codes = [sg.get("code") for sg in segs]
+    if any(not c or c not in eps for c in codes) or len(set(codes)) != len(codes):
+        return False
+    first = eps[codes[0]]
+    if any(eps[c]["season"] != first["season"] for c in codes):
+        return False
+    if [eps[c]["episode"] for c in codes] != list(range(first["episode"],
+                                                       first["episode"] + len(codes))):
+        return False
+    duration = float(f.get("duration") or 0)
+    runtimes = [float(eps[c].get("runtime") or 0) * 60 for c in codes]
+    if not duration or not all(runtimes):
+        return False
+    if not 0.7 * sum(runtimes) <= duration <= 1.3 * sum(runtimes):
+        return False
+    prev_end, covered = 0.0, 0.0
+    for seg, runtime in zip(segs, runtimes):
+        start, end = float(seg.get("start") or 0), float(seg.get("end") or 0)
+        span = end - start
+        if span < max(0.35 * runtime, 240) or start < prev_end - 1:
+            return False
+        if float(seg.get("score") or 0) < 0.35 or int(seg.get("words") or 0) < 80:
+            return False
+        prev_end, covered = end, covered + span
+    return covered >= 0.5 * duration
+
+
 def build_plan(series: dict, scan: dict) -> list[dict]:
     s = get_settings()
     root = Path(series["path"])
@@ -560,15 +604,18 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     # 1. Decide each file's episode list from its segments.
     decided: dict[str, list[tuple[dict, str, str, bool]]] = {}
     for f in files:
+        parts = _parts_complete(f, eps)
         chosen = []
         for seg in f.get("segments") or []:
             code, strength, ai = _segment_choice(seg)
             if code:
+                if strength == "low" and parts:
+                    strength = "parts"
                 chosen.append((seg, code, strength, ai))
         decided[f["rel"]] = chosen
 
     # 2. Claims: which (file, segment) owns each episode. Best evidence wins.
-    rank = {"manual": 3, "high": 2, "ai": 1, "provisional": 0, "low": 0}
+    rank = {"manual": 3, "high": 2, "parts": 2, "ai": 1, "provisional": 0, "low": 0}
     claims: dict[str, list[tuple]] = {}
     for f in files:
         for seg, code, strength, ai in decided[f["rel"]]:
@@ -610,6 +657,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             decided_by = "you"
         elif "ai" in strengths:
             decided_by = "AI"
+        elif "parts" in strengths:
+            decided_by = "parts"
         elif any(sg.get("title_card") for sg in segs):
             decided_by = "title card"
         elif any(sg.get("evidence") == "release name" for sg in segs):
@@ -705,9 +754,14 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         if codes == expected:
             # Same episodes as the filename already says (e.g. the AI agreeing with it):
             # nothing to fix. Title formatting alone is never a reason to rename.
-            items.append({**base, "kind": "ok", "reason": (
-                "Correct — the episodes you set are the ones in the filename" if manual else
-                "Correct — the evidence agrees with the filename" + (" (AI)" if ai else ""))})
+            if "parts" in strengths:
+                reason = (f"Correct — one file, {len(codes)} parts: its own transcript covers "
+                          f"{', '.join(codes)} in order")
+            else:
+                reason = (
+                    "Correct — the episodes you set are the ones in the filename" if manual else
+                    "Correct — the evidence agrees with the filename" + (" (AI)" if ai else ""))
+            items.append({**base, "kind": "ok", "reason": reason})
             continue
         covered = sum(max(0.0, float(c[0].get("end", 0)) - float(c[0].get("start", 0))) for c in usable)
         dur = float(f.get("duration") or 0)
@@ -747,11 +801,16 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             if dst_rel == rel:
                 items.append({**base, "kind": "ok", "reason": "Correct"})
                 continue
+            if "parts" in strengths:
+                why = (f"One file, {len(codes)} parts: its own transcript covers "
+                       f"{', '.join(codes)} in order")
+            else:
+                why = ((f.get("note") or "Sample suggestion — check before applying")
+                       if sample_only and not ai else
+                       "AI suggestion — check before applying" if ai else
+                       f.get("note") or "Name does not match content")
             items.append({**base, "kind": "rename",
-                          "reason": ((f.get("note") or "Sample suggestion — check before applying")
-                                     if sample_only and not ai else
-                                     "AI suggestion — check before applying" if ai else
-                                     f.get("note") or "Name does not match content"),
+                          "reason": why,
                           "ai": ai, "codes": codes,
                           "targets": [{"path": dst_rel, "codes": codes}],
                           "selected": not ai and (not sample_only or manually_set)})

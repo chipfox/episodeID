@@ -79,7 +79,7 @@ const KIND_BADGE = { rename: "b-info", split: "b-warn", join: "b-warn", aside: "
 // "ok" is the plan's word for a file that is already right; the row says so plainly,
 // because that is the word a person looks for.
 const KIND_LABEL = { ok: "correct" };
-const DECIDED_LABEL = { AI: "AI", you: "you set it", "title card": "title card", "release name": "release name" };
+const DECIDED_LABEL = { AI: "AI", you: "you set it", parts: "parts verified", "title card": "title card", "release name": "release name" };
 const ACTIONABLE = ["rename", "split", "join", "aside"];
 
 // -------------------------------------------------------------------- theme
