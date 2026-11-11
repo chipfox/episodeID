@@ -115,9 +115,12 @@ scan = {"results": {"files": [
      "expected": ["S01E03"]},
     {"scope": "full", "text_source": "whisper small", "sample_text": PART1 * 2,
      "expected": ["S01E04"]},
+    {"scope": "full", "text_source": "remote parakeet", "sample_text": "",
+     "expected": ["S01E05"], "rel": "Season 1/S01E05.mkv"},
 ]}}
 pipeline.db.latest_scan = lambda _sid: scan
-checked = pipeline._corroborating_text(1)
-assert list(checked) == ["S01E01", "S01E04"], checked
+pipeline.cached_dialogue = lambda _p: {"source": "remote parakeet", "cues": [[0, 1, PART1]]}
+checked = pipeline._corroborating_text({"id": 1, "path": str(W / "media")})
+assert list(checked) == ["S01E01", "S01E04", "S01E05"], checked
 
 print("reference_corroboration_test: OK — 5 cases")
