@@ -45,10 +45,10 @@ def decide(plan: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for it in plan.get("items") or []:
         rels = it.get("sources") or ([it["source"]] if it.get("source") else [])
-        parts = it.get("decided_by") == "parts"
+        asserted = it.get("decided_by") in ("parts", "split files")
         evidence = sorted({sg.get("code") for sg in it.get("segments") or []
                            if sg.get("code")
-                           and (sg.get("confidence") in ("high", "manual") or parts)})
+                           and (sg.get("confidence") in ("high", "manual") or asserted)})
         for rel in rels:
             target = next((t["path"] for t in it.get("targets") or []), None)
             out[rel] = {"kind": it.get("kind"),
@@ -88,7 +88,7 @@ def score(plan: dict, golden: dict) -> dict:
             # `ok` means two different things: "the evidence agrees with the name"
             # (status OK) and "leave this unsettled file alone" (a deferral). Judge
             # an assertion by its evidence, and a deferral like a review row.
-            if d.get("status") and d["status"] != "OK" and d.get("decided_by") != "parts":
+            if d.get("status") and d["status"] != "OK" and d.get("decided_by") not in ("parts", "split files"):
                 if rel in undecidable:
                     out["deferred_correctly"].append(rel)
                 else:
