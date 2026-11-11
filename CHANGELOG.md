@@ -50,7 +50,9 @@ Changelog; release image tags identify their source commit.
   the last scan's trusted dialogue in and replaces only corroborated references,
   recording version-2 markers. The S09E02 case — a part-1 subtitle named for part 2 —
   is now fixed automatically instead of looking like a valid pair. Version-1 keep
-  markers are retried once when file dialogue is available.
+  markers are retried once when file dialogue is available. A full read keeps its
+  transcript in the read-only text cache rather than the scan row, so the cache is
+  the second source — it never transcribes or writes.
 - **Parts survive combined or missing runtimes.** `_parts_check()` accepts a duration
   that fits the max runtime when TVDB lists the combined runtime on each part (90/90
   for one 87-minute story), and falls back to a five-minute-per-part floor when no
