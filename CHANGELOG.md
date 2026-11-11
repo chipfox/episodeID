@@ -16,7 +16,7 @@ Changelog; release image tags identify their source commit.
   release, so a sidecar must never be able to turn a multi-part file into an
   automatic OK. Verified rows carry the `parts` evidence strength and
   `decided_by: "parts"`; a file named for one part while covering three is renamed
-  to the combined name instead of going to review. `PLAN_VERSION` is 13, and
+  to the combined name instead of going to review. `PLAN_VERSION` is 14, and
   `tools/golden_check.py` judges a `parts` row by its segments rather than treating
   its low score as a deferral. A parts row keeps its real `LOW_CONFIDENCE` status but
   its note says why the score stays low, so the badge and the reason agree.
@@ -44,6 +44,27 @@ Changelog; release image tags identify their source commit.
   from 1,336 to 1,178 lines.
 
 ### Fixed
+- **Reference repair now believes the file, not the release name.** `fetch_opensubs()`
+  can download a second candidate and keep the one the episode's own ASR/embedded
+  text actually contains (containment ≥ 0.5); `repair_reference_conflicts()` passes
+  the last scan's trusted dialogue in and replaces only corroborated references,
+  recording version-2 markers. The S09E02 case — a part-1 subtitle named for part 2 —
+  is now fixed automatically instead of looking like a valid pair. Version-1 keep
+  markers are retried once when file dialogue is available.
+- **Parts survive combined or missing runtimes.** `_parts_check()` accepts a duration
+  that fits the max runtime when TVDB lists the combined runtime on each part (90/90
+  for one 87-minute story), and falls back to a five-minute-per-part floor when no
+  runtime is known at all.
+- **Multipart near-misses say which check failed.** The review note and reason carry
+  the failed condition — sidecar text, a sample read, a short span, a weak score, a
+  duration mismatch, or too little coverage — instead of a bare "Needs a decision".
+- **A sidecar never pre-ticks an action.** Sidecar-only evidence can still suggest a
+  rename, split, join or aside, but the row starts unselected with a reason, because a
+  third party can drop a subtitle next to a file it does not describe.
+- **Local whisper counts as the file's own text.** Parts verification, split-release
+  comparison and reference corroboration now accept `whisper …` (faster-whisper)
+  alongside `remote …` ASR and `embedded …` subtitles; previously a local-ASR install
+  could never verify a multipart file or corroborate a reference.
 - **A split release is not a duplicate.** Two files can both match S01E01 because the
   episode was released as two halves. The planner used to see the weaker file as a
   duplicate and pre-select moving it to `backup/duplicates`. It now compares the two

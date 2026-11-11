@@ -354,7 +354,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 13
+PLAN_VERSION = 14
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -528,8 +528,8 @@ def _eliminate(items, eps, root, layout, s, series_name, year) -> None:
                              f"file is {code} (the evidence for this file alone wasn't enough)")
 
 
-def _parts_complete(f: dict, eps: dict) -> bool:
-    """Does this file's own text prove it holds several whole parts?
+def _parts_check(f: dict, eps: dict) -> tuple[bool, str]:
+    """Does this file's own text prove it holds several whole parts? (verdict, why not)
 
     Two-part stories are often stored as one file, and cartoon episodes are often
     two or three segments in one file. When the references for the parts overlap,
@@ -540,36 +540,71 @@ def _parts_complete(f: dict, eps: dict) -> bool:
     release (or nothing at all), so it can never prove what a file contains.
     """
     source = str(f.get("text_source") or "")
-    if not source.startswith(("remote ", "embedded ")) or f.get("scope") == "sample":
-        return False
+    if not source.startswith(("remote ", "embedded ", "whisper ")):
+        if source.startswith("sidecar "):
+            return False, "the dialogue came from a sidecar, which cannot prove the file's contents"
+        return False, "the file has no dialogue of its own"
+    if f.get("scope") == "sample":
+        return False, "only a sample was read"
     segs = f.get("segments") or []
-    if len(segs) < 2 or any(sg.get("override") or sg.get("scope") == "sample" for sg in segs):
-        return False
+    if len(segs) < 2:
+        return False, "it has only one part's dialogue"
+    if any(sg.get("override") or sg.get("scope") == "sample" for sg in segs):
+        return False, "one part's episode was set by hand or read from a sample"
     codes = [sg.get("code") for sg in segs]
     if any(not c or c not in eps for c in codes) or len(set(codes)) != len(codes):
-        return False
+        return False, "the segments don't name distinct, known episodes"
     first = eps[codes[0]]
     if any(eps[c]["season"] != first["season"] for c in codes):
-        return False
+        return False, "the parts span more than one season"
     if [eps[c]["episode"] for c in codes] != list(range(first["episode"],
                                                        first["episode"] + len(codes))):
-        return False
+        return False, "the parts are not consecutive episodes"
     duration = float(f.get("duration") or 0)
+    if not duration:
+        return False, "its duration is unknown"
     runtimes = [float(eps[c].get("runtime") or 0) * 60 for c in codes]
-    if not duration or not all(runtimes):
-        return False
-    if not 0.7 * sum(runtimes) <= duration <= 1.3 * sum(runtimes):
-        return False
+    known = [rt for rt in runtimes if rt > 0]
+    if known and len(known) != len(runtimes):
+        return False, "one of the parts has no runtime"
+    if known:
+        sum_fit = 0.7 * sum(runtimes) <= duration <= 1.3 * sum(runtimes)
+        # Some shows list the combined runtime on each part (a 90-minute story as
+        # two 90-minute episodes). When the file is one story long, the max runtime
+        # is the right yardstick; requiring the sum would reject it.
+        max_fit = (len(set(runtimes)) == 1
+                   and 0.7 * runtimes[0] <= duration <= 1.3 * runtimes[0])
+        if not (sum_fit or max_fit):
+            return False, (f"the file is {duration / 60:.0f} min but the parts are "
+                           f"{sum(runtimes) / 60:.0f} min together")
+        effective = runtimes if sum_fit else [max(runtimes)] * len(runtimes)
+        mins = [max(0.35 * rt, 240) for rt in effective]
+    else:
+        # No runtime metadata at all: a part must still be a real block of the file.
+        if duration < len(codes) * 300:
+            return False, (f"the file is {duration / 60:.0f} min, too short for "
+                           f"{len(codes)} parts")
+        mins = [300] * len(codes)
     prev_end, covered = 0.0, 0.0
-    for seg, runtime in zip(segs, runtimes):
+    for n, (seg, min_span) in enumerate(zip(segs, mins), 1):
         start, end = float(seg.get("start") or 0), float(seg.get("end") or 0)
         span = end - start
-        if span < max(0.35 * runtime, 240) or start < prev_end - 1:
-            return False
-        if float(seg.get("score") or 0) < 0.35 or int(seg.get("words") or 0) < 80:
-            return False
+        if span < min_span:
+            return False, f"part {n} covers only {span / 60:.0f} min of it"
+        if start < prev_end - 1:
+            return False, "its parts overlap"
+        if float(seg.get("score") or 0) < 0.35:
+            return False, f"part {n}'s match is too weak ({float(seg.get('score') or 0):.2f})"
+        if int(seg.get("words") or 0) < 80:
+            return False, f"part {n} has only {int(seg.get('words') or 0)} words"
         prev_end, covered = end, covered + span
-    return covered >= 0.5 * duration
+    if covered < 0.5 * duration:
+        return False, f"its parts cover only {covered / duration:.0%} of the file"
+    return True, ""
+
+
+def _parts_complete(f: dict, eps: dict) -> bool:
+    return _parts_check(f, eps)[0]
 
 
 def _own_text(f: dict | None) -> str:
@@ -581,7 +616,7 @@ def _own_text(f: dict | None) -> str:
     if not f:
         return ""
     text = str(f.get("sample_text") or "")
-    if not str(f.get("text_source") or "").startswith(("remote ", "embedded ")):
+    if not str(f.get("text_source") or "").startswith(("remote ", "embedded ", "whisper ")):
         return ""
     return text if len(text.split()) >= 60 else ""
 
@@ -633,8 +668,10 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
 
     # 1. Decide each file's episode list from its segments.
     decided: dict[str, list[tuple[dict, str, str, bool]]] = {}
+    part_notes: dict[str, str] = {}
     for f in files:
-        parts = _parts_complete(f, eps)
+        parts, why = _parts_check(f, eps)
+        part_notes[f["rel"]] = why
         chosen = []
         for seg in f.get("segments") or []:
             code, strength, ai = _segment_choice(seg)
@@ -697,10 +734,14 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             decided_by = "release name"
         else:
             decided_by = "dialogue"
-        base = {"source": rel, "status": f["status"],
-                "note": (f"Parts' references overlap, so the scores stay low; its own transcript "
-                         f"covers {', '.join(c[1] for c in chosen)} in order"
-                         if "parts" in strengths else f.get("note", "")),
+        note = (f"Parts' references overlap, so the scores stay low; its own transcript "
+                f"covers {', '.join(c[1] for c in chosen)} in order"
+                if "parts" in strengths else f.get("note", ""))
+        why = part_notes.get(rel) or ""
+        if why and "parts" not in strengths and (len(f.get("expected") or []) >= 2 or len(segs) >= 2):
+            note = (note.rstrip(" .") + ". " if note else "") + f"Multi-part check: {why}"
+        base = {"source": rel, "status": f["status"], "note": note,
+                "parts_note": why if why and "parts" not in strengths else "",
                 "text_source": f.get("text_source"), "expected": f.get("expected") or [],
                 "segments": segs, "selected": False,
                 "evidence": f.get("evidence"),
@@ -747,6 +788,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 or (f.get("hold") and f["status"] != "MANUAL"):
             # Not enough evidence to act on every part of this file.
             reason = f.get("note") or "Needs a decision"
+            if base.get("parts_note"):
+                reason += f" (multi-part check: {base['parts_note']})"
             if f.get("story_pair_overlap"):
                 ov = f["story_pair_overlap"]
                 reason += (f" — its reference is {ov['similarity']:.0%} the same as {ov['with']}'s "
@@ -964,6 +1007,24 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     # 5. One episode in several files ("… - Part 1.mkv", "… - Part 2.mkv"): offer to join
     #    them into one file, instead of keeping one and moving the rest aside.
     items = _join_parts(items, files, decided, eps, root, layout, s, series_name, series.get("year"))
+
+    # 6. Sidecar text is third-party input: it may have been dropped next to a file
+    #    it does not describe. It can still suggest an action, but never pre-tick one.
+    sidecar_sources = {f["rel"] for f in files
+                       if str(f.get("text_source") or "").startswith("sidecar ")}
+    if sidecar_sources:
+        for it in items:
+            if it["kind"] not in ACTIONABLE:
+                continue
+            sources = it.get("sources") or [it.get("source")]
+            if not any(src in sidecar_sources for src in sources):
+                continue
+            it["selected"] = False
+            reason = it.get("reason") or ""
+            if "sidecar" not in reason.lower():
+                it["reason"] = ((reason.rstrip(" .") + " — " if reason else "") +
+                                "the dialogue came from a sidecar (third-party text); "
+                                "check this before applying")
 
     for i, it in enumerate(items):
         it["id"] = i

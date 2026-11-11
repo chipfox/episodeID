@@ -199,13 +199,40 @@ def job_fetch_refs(ctx, params):
         ctx.status("Repairing references that share a transcript")
         fresh = db.get_series(series["id"]) or series
         eps_by_code = {ep_code(e["season"], e["episode"]): e for e in fresh["episodes"]}
+        dialogue = _corroborating_text(series["id"])
+        if dialogue:
+            ctx.log(f"Reference repair: {len(dialogue)} episode(s) have their own dialogue to "
+                    "check replacement subtitles against.")
         result["repairs"] = repair_reference_conflicts(
-            fresh, ctx, story=lambda code: _story(eps_by_code, code))
+            fresh, ctx, story=lambda code: _story(eps_by_code, code), corroborate=dialogue)
     ctx.status("Cross-checking flagged OpenSubtitles references")
     result["names"] = check_release_names(db.get_series(series["id"]), ctx)
     result["verification"] = verify_flagged(db.get_series(series["id"]), ctx)
     db.update_series(series["id"], episodes=series["episodes"])  # cached IMDb ids
     return result
+
+
+def _corroborating_text(series_id: int) -> dict[str, str]:
+    """Episode code -> the dialogue the last scan read from that file.
+
+    Only text that came from the file itself (ASR or embedded subtitles), from a full
+    read, and long enough to compare. Sidecars are third-party text: they can be
+    dropped next to a file that they do not describe, so they never corroborate a
+    reference replacement.
+    """
+    scan = db.latest_scan(series_id) or {}
+    out: dict[str, str] = {}
+    for f in scan.get("files") or []:
+        if f.get("scope") != "full":
+            continue
+        if not str(f.get("text_source") or "").startswith(("remote ", "embedded ", "whisper ")):
+            continue
+        text = str(f.get("sample_text") or "")
+        if len(text.split()) < 60:
+            continue
+        for code in f.get("expected") or []:
+            out.setdefault(code, text)
+    return out
 
 
 def _aired(e: dict) -> bool:

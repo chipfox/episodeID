@@ -556,7 +556,8 @@ def duplicate_reference(code: str, text: str, texts: dict[str, str],
     return best if best is not None and share >= threshold else None
 
 
-def fetch_opensubs(os_: OpenSubtitles, series: dict, ep: dict, ctx) -> tuple[dict | None, str]:
+def fetch_opensubs(os_: OpenSubtitles, series: dict, ep: dict, ctx,
+                   corroborate: str | None = None, tries: int = 1) -> tuple[dict | None, str]:
     """Returns (ref, note). Raises QuotaExhausted.
 
     Subtitle *text* on OpenSubtitles comes from release files, which are numbered the
@@ -573,10 +574,12 @@ def fetch_opensubs(os_: OpenSubtitles, series: dict, ep: dict, ctx) -> tuple[dic
     sname = series.get("name") or ""
     pick, how = None, ""
     tried: list[str] = []  # for the log when nothing is found
+    pool: list[dict] = []  # every search result, for corroborated selection
 
     def search(label, **q):
         res = os_.search(**q)
         tried.append(f"{label}: {len(res)}")
+        pool.extend(res)
         return res
 
     if series.get("imdb_id"):
@@ -627,6 +630,45 @@ def fetch_opensubs(os_: OpenSubtitles, series: dict, ep: dict, ctx) -> tuple[dic
                 break
     if pick is None:
         return None, "no subtitle found (OpenSubtitles results — " + "; ".join(tried) + ")"
+    # A candidate that merely looks right by number and title can still be the wrong
+    # half of a two-parter: the file name says S09E02 while the text is part 1.
+    # When the caller has the file's own dialogue, download a couple of candidates
+    # and keep the one that dialogue actually contains. Sidecar text never reaches
+    # here as corroboration — the caller only passes ASR/embedded text.
+    corroborated = None
+    if corroborate and len(corroborate.split()) >= 20 and tries > 1:
+        cands, seen = [], set()
+        ordered = [pick[3]] + sorted(
+            pool, key=lambda r: -((r.get("attributes") or {}).get("download_count") or 0))
+        for r in ordered:
+            rid = str(r.get("id"))
+            if rid in seen:
+                continue
+            seen.add(rid)
+            p = _pick([r], title, ep["season"], ep["episode"], True, eps, sname)
+            if p:
+                cands.append(p)
+        best = None
+        goal = textsim.bigrams(corroborate)
+        for p in cands[:max(1, int(tries))]:
+            r = p[3]
+            try:
+                raw = os_.download((r.get("attributes") or {})["files"][0]["file_id"])
+                text = " ".join(c.text for c in parse_subtitle_text(raw, ".srt"))
+            except Exception:  # noqa: BLE001 — a bad candidate is skipped, not fatal
+                continue
+            score = textsim.containment(goal, textsim.bigrams(text))
+            if best is None or score > best[0]:
+                best = (score, p, raw)
+        if best is None or best[0] < 0.5:
+            return None, ("no OpenSubtitles candidate matched the file's own transcript"
+                          + (f" (best {best[0]:.2f})" if best else ""))
+        pick = best[1]
+        corroborated = round(best[0], 3)
+        raw = best[2]
+        how += f"; chosen because it matches the file's own transcript ({corroborated:.2f})"
+    else:
+        raw = None
     title_ok, _, named, r = pick
     a = r["attributes"]
     fd = a.get("feature_details") or {}
@@ -635,14 +677,14 @@ def fetch_opensubs(os_: OpenSubtitles, series: dict, ep: dict, ctx) -> tuple[dic
     if named[0] == "match":
         conflict = False  # the file name carries this episode's TVDB title
     os_title_code = title_code(eps, fd.get("title") or "")
-    raw = os_.download(a["files"][0]["file_id"])
+    raw = raw or os_.download(a["files"][0]["file_id"])
     cues = parse_subtitle_text(raw, ".srt")
     text = " ".join(c.text for c in cues)
     if len(text) < 200:
         return None, "downloaded subtitle was empty"
     if named[0] == "match":
         how += f"; file name confirms the title ({named[2]})"
-    return {
+    ref = {
         "source": "opensubtitles",
         "text": text,
         "via": how,
@@ -655,7 +697,10 @@ def fetch_opensubs(os_: OpenSubtitles, series: dict, ep: dict, ctx) -> tuple[dic
         "release_name": named[2] or (subtitle_names(r) or [""])[0],
         "name_verified": named[0] == "match",
         "names_checked": True,
-    }, how
+    }
+    if corroborated is not None:
+        ref["corroborated"] = corroborated
+    return ref, how
 
 
 def check_release_names(series: dict, ctx) -> dict:
@@ -960,7 +1005,8 @@ def _text_similarity(a: str, b: str) -> float:
 
 
 def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int = 4,
-                               similarity: float = 0.85) -> dict:
+                               similarity: float = 0.85,
+                               corroborate: dict[str, str] | None = None) -> dict:
     """One transcript filed under two episode numbers (a wiki page that covered
     both, an upload duplicated) makes both episodes unprovable: either file
     matches both references equally. That is not a matcher failure, and no model
@@ -1002,7 +1048,10 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
     wanted: list[str] = []
     for pair in pairs:
         for code in pair["codes"]:
-            if code not in manual and code not in repairs and code in eps and code not in wanted:
+            has_text = bool((corroborate or {}).get(code))
+            retry = code not in repairs or (has_text and
+                                            (repairs.get(code) or {}).get("version") != 2)
+            if code not in manual and retry and code in eps and code not in wanted:
                 wanted.append(code)
     if not wanted:
         ctx.log(f"Reference conflicts: {len(pairs)} pair(s) share a transcript, and none of them "
@@ -1010,6 +1059,7 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
                 "once with replacements that were the same text).")
         return out
     wanted = wanted[:max(2, int(max_downloads))]
+    per_code = max(1, min(2, int(max_downloads) // max(1, len(wanted))))
     os_ = OpenSubtitles()
     if not os_.configured:
         ctx.log(f"Reference conflicts: {len(pairs)} pair(s) share a transcript (" +
@@ -1027,7 +1077,9 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
             ctx.check_cancel()
             ctx.status(f"Reference repair: {code} on OpenSubtitles")
             try:
-                ref, note = fetch_opensubs(os_, series, eps[code], ctx)
+                ref, note = fetch_opensubs(os_, series, eps[code], ctx,
+                                           corroborate=(corroborate or {}).get(code),
+                                           tries=per_code)
             except QuotaExhausted as e:
                 ctx.log(f"Reference repair: OpenSubtitles quota reached ({e}).")
                 break
@@ -1042,6 +1094,45 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
         for pair in pairs:
             a, b = pair["codes"]
             na, nb = fetched.get(a), fetched.get(b)
+            if bool((corroborate or {}).get(a) or (corroborate or {}).get(b)):
+                # With the library's own dialogue we do not have to guess from titles:
+                # keep only the replacements that the episode's file actually contains,
+                # and never replace a reference on the strength of a look-alike name.
+                good = {c: fetched[c] for c in (a, b)
+                        if fetched.get(c) and fetched[c].get("corroborated")}
+                if len(good) == 2:
+                    sim = _text_similarity(good[a]["text"], good[b]["text"])
+                    if sim >= SAME_EPISODE_SCORE:
+                        for code in (a, b):
+                            repairs[code] = {"keep": True, "version": 2,
+                                             "why": "corroborated replacements matched each other",
+                                             "similarity": round(sim, 3),
+                                             "ref": ref_hashes.get(code) or _ref_fingerprint("")}
+                        touched = True
+                        ctx.log(f"{a}/{b}: replacements that match each file still match each "
+                                f"other ({sim:.2f}) — keeping the old references.")
+                        continue
+                    for code, ref in ((a, good[a]), (b, good[b])):
+                        _replace_reference(tvdb_id, code, ref, repairs,
+                                           conflicted_with=(b if code == a else a))
+                        replaced += 1
+                    ctx.log(f"{a}/{b} ✓ replaced both transcripts — each one matches its own "
+                            "file's dialogue")
+                    continue
+                for code in (a, b):
+                    new = good.get(code)
+                    if new is not None:
+                        _replace_reference(tvdb_id, code, new, repairs,
+                                           conflicted_with=(b if code == a else a))
+                        replaced += 1
+                        ctx.log(f"{code} ✓ replaced with a transcript that matches its file's "
+                                f"own dialogue ({new['corroborated']:.2f})")
+                    else:
+                        repairs[code] = {"keep": True, "version": 2,
+                                         "why": "no candidate matched the file's own transcript",
+                                         "ref": ref_hashes.get(code) or _ref_fingerprint("")}
+                        touched = True
+                continue
             if na and nb:
                 sim = _text_similarity(na["text"], nb["text"])
                 if sim >= SAME_EPISODE_SCORE:
@@ -1049,7 +1140,8 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
                     # story as one transcript too, and re-downloading both copies on
                     # every fetch would waste quota forever without changing anything.
                     for code in (a, b):
-                        repairs[code] = {"keep": True, "why": "replacement matched the other part",
+                        repairs[code] = {"keep": True, "version": 2,
+                                         "why": "replacement matched the other part",
                                          "similarity": round(sim, 3),
                                          "ref": ref_hashes.get(code) or _ref_fingerprint("")}
                     touched = True
@@ -1071,7 +1163,8 @@ def repair_reference_conflicts(series: dict, ctx, story=None, max_downloads: int
                 current = (old.get(other) or {}).get("text") or ""
                 sim = _text_similarity(new["text"], current) if current else 0.0
                 if current and sim >= SAME_EPISODE_SCORE:
-                    repairs[code] = {"keep": True, "why": "replacement matched the other part",
+                    repairs[code] = {"keep": True, "version": 2,
+                                     "why": "replacement matched the other part",
                                      "similarity": round(sim, 3),
                                      "ref": ref_hashes.get(code) or _ref_fingerprint("")}
                     touched = True
@@ -1102,6 +1195,7 @@ def _replace_reference(tvdb_id: int, code: str, ref: dict, repairs: dict,
     repairs[code] = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                      "conflicted_with": conflicted_with,
                      "replaced_source": previous.get("source") or "none",
+                     "version": 2,
                      "ref": _ref_fingerprint(ref.get("text") or "")}
 
 

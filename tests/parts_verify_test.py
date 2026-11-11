@@ -43,6 +43,12 @@ def row(f):
     return plan[f["rel"]]
 
 
+def row_runtime(f, runtime):
+    s = {**series, "episodes": [{"season": 1, "episode": n, "title": t, "runtime": runtime}
+                                for n, t in ((1, "One"), (2, "Two"), (3, "Three"))]}
+    return {it["source"]: it for it in planner.build_plan(s, {"files": [f]})}[f["rel"]]
+
+
 TWO = [seg(0, 2400, "S01E01"), seg(2400, 4200, "S01E02", score=.72, words=700)]
 
 # A file named for both parts, read from its own audio, is proved by geometry.
@@ -56,6 +62,7 @@ sidecar = scan_file("Show - S01E01E02 - Story (sidecar).mkv", ["S01E01", "S01E02
                     source="sidecar Show.S01E01E02.eng.srt")
 r = row(sidecar)
 assert r["kind"] == "review", r
+assert "sidecar" in (r.get("note") or "") + r["reason"], r
 
 # Thin evidence in a part is not proof of that part.
 thin = scan_file("Show - S01E01E02 - Thin.mkv", ["S01E01", "S01E02"],
@@ -77,6 +84,19 @@ jump = scan_file("Show - S01E01E03 - Jump.mkv", ["S01E01", "S01E03"],
                  [seg(0, 2400, "S01E01"), seg(2400, 4200, "S01E03")])
 assert row(jump)["kind"] == "review", row(jump)
 
+# TVDB sometimes lists the combined runtime on each part (90/90 for one 87-min
+# story). The file fits the max runtime, not the sum, and is still proved.
+combined = scan_file("Show - S01E01E02 - Combined.mkv", ["S01E01", "S01E02"],
+                     [seg(0, 2400, "S01E01"), seg(2400, 4500, "S01E02", score=.72, words=700)])
+r = row_runtime(combined, 90)
+assert r["kind"] == "ok" and r["decided_by"] == "parts", r
+
+# No runtime metadata at all: a part must still be a real block of the file.
+noruntime = scan_file("Show - S01E01E02 - NoRuntime.mkv", ["S01E01", "S01E02"],
+                      [seg(0, 2400, "S01E01"), seg(2400, 4500, "S01E02", score=.72, words=700)])
+r = row_runtime(noruntime, 0)
+assert r["kind"] == "ok" and r["decided_by"] == "parts", r
+
 # An AI annotation on a low segment cannot displace the structural proof.
 ai = scan_file("Show - S01E01E02 - AI.mkv", ["S01E01", "S01E02"],
                [dict(TWO[0], llm={"code": "S01E01", "confidence": .9}),
@@ -84,4 +104,10 @@ ai = scan_file("Show - S01E01E02 - AI.mkv", ["S01E01", "S01E02"],
 r = row(ai)
 assert r["kind"] == "ok" and r["decided_by"] == "parts", r
 
-print("parts_verify_test: OK — 7 cases")
+# A part read by the local faster-whisper backend is the file's own audio too.
+local = scan_file("Show - S01E01E02 - Local.mkv", ["S01E01", "S01E02"], TWO,
+                  source="whisper small")
+r = row(local)
+assert r["kind"] == "ok" and r["decided_by"] == "parts", r
+
+print("parts_verify_test: OK — 10 cases")
