@@ -221,8 +221,9 @@ def _corroborating_text(series_id: int) -> dict[str, str]:
     reference replacement.
     """
     scan = db.latest_scan(series_id) or {}
+    files = (scan.get("results") or {}).get("files") or []
     out: dict[str, str] = {}
-    for f in scan.get("files") or []:
+    for f in files:
         if f.get("scope") != "full":
             continue
         if not str(f.get("text_source") or "").startswith(("remote ", "embedded ", "whisper ")):

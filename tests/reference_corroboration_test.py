@@ -106,7 +106,7 @@ assert refs["S01E01"]["corroborated"] and refs["S01E02"]["corroborated"]
 assert R._load_repairs(900001)["S01E02"].get("version") == 2
 
 # Only trusted, full, long-enough dialogue can corroborate; a sidecar never can.
-scan = {"files": [
+scan = {"results": {"files": [
     {"scope": "full", "text_source": "remote parakeet", "sample_text": PART1 * 2,
      "expected": ["S01E01"]},
     {"scope": "full", "text_source": "sidecar Show.S01E02.srt", "sample_text": PART2 * 2,
@@ -115,7 +115,7 @@ scan = {"files": [
      "expected": ["S01E03"]},
     {"scope": "full", "text_source": "whisper small", "sample_text": PART1 * 2,
      "expected": ["S01E04"]},
-]}
+]}}
 pipeline.db.latest_scan = lambda _sid: scan
 checked = pipeline._corroborating_text(1)
 assert list(checked) == ["S01E01", "S01E04"], checked
