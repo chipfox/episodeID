@@ -6,6 +6,19 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-11
 
 ### Added
+- **Episode summaries are a calibrated fallback when a reference transcript is
+  missing.** A per-series TF-IDF index is fitted on the available reference dialogue
+  and queried with `title + cleaned overview` (the Beavis music-video block is
+  stripped). Calibration selects a score/margin gate whose Wilson 95% lower bound
+  reaches the configured target and reports a 5-fold out-of-fold validation; it is
+  refreshed automatically when references or summaries change. When an episode has
+  no reference, a full read of the file's own ASR/embedded dialogue is scored against
+  every summary. A summary alone can settle a name only at the stricter auto gate;
+  otherwise a title card must agree, and a sidecar is always review-only. Rows carry
+  `summary_match` evidence (code, score, margin, terms, gate) and a
+  `summary`/`summary+title` badge. `PLAN_VERSION` is 15. Pinned by
+  `tests/summary_index_test.py`, `tests/summary_calibration_test.py`, and
+  `tests/summary_fallback_test.py`.
 - **Multi-part files verify themselves from their own audio.** When one file holds
   two or three parts of a story, the parts' reference transcripts overlap and no
   score can tell the parts apart — but the shape can. `planner._parts_complete()`
@@ -16,11 +29,11 @@ Changelog; release image tags identify their source commit.
   release, so a sidecar must never be able to turn a multi-part file into an
   automatic OK. Verified rows carry the `parts` evidence strength and
   `decided_by: "parts"`; a file named for one part while covering three is renamed
-  to the combined name instead of going to review. `PLAN_VERSION` is 14, and
+  to the combined name instead of going to review. `PLAN_VERSION` is 15, and
   `tools/golden_check.py` judges a `parts` row by its segments rather than treating
   its low score as a deferral. A parts row keeps its real `LOW_CONFIDENCE` status but
   its note says why the score stays low, so the badge and the reason agree.
-  Pinned by `tests/parts_verify_test.py` (6 cases, including a sidecar negative).
+  Pinned by `tests/parts_verify_test.py` (10 cases, including a sidecar negative).
 
 ### Removed
 - **Dead code with no caller anywhere:** `media_text.has_image_subs()` and

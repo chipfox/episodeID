@@ -354,7 +354,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 14
+PLAN_VERSION = 15
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -742,12 +742,49 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             note = (note.rstrip(" .") + ". " if note else "") + f"Multi-part check: {why}"
         base = {"source": rel, "status": f["status"], "note": note,
                 "parts_note": why if why and "parts" not in strengths else "",
+                "summary_match": f.get("summary_match"),
                 "text_source": f.get("text_source"), "expected": f.get("expected") or [],
                 "segments": segs, "selected": False,
                 "evidence": f.get("evidence"),
                 "decided_by": decided_by, "decided_confidence": ai_conf,
                 "scope": "sample" if sample_only else (f.get("scope") or "full"),
                 "sample": sample_only}
+
+        # Summary fallback: a no-reference file can be settled by its own
+        # summary only at the calibrated auto gate, or with a title card's
+        # independent agreement. Anything else stays a review suggestion.
+        sm = f.get("summary_match") or {}
+        expected0 = f.get("expected") or []
+        if (sm.get("mode") == "auto" and sm.get("passes")
+                and len(expected0) == 1 and sm.get("code") in eps
+                and not any(c[2] in ("high", "parts", "manual") for c in chosen)):
+            code = sm["code"]
+            cards = f.get("title_cards") or []
+            agree = any(c.get("code") == code and not c.get("partial") for c in cards)
+            if sm.get("auto") or agree:
+                by = "summary" if sm.get("auto") else "summary+title"
+                if code == expected0[0]:
+                    items.append({**base, "kind": "ok", "decided_by": by,
+                                  "reason": f"Correct — episode summary matches {code} "
+                                            f"({sm['score']:.2f}, margin {sm['margin']:.2f}); "
+                                            "no reference transcript exists"})
+                    continue
+                ep = eps[code]
+                name = episode_filename(series_name, [ep], src.suffix, src.name, s,
+                                        series.get("year"))
+                dst = season_dir(root, ep["season"], s, layout) / name
+                dst_rel = str(dst.relative_to(root))
+                items.append({**base, "kind": "rename", "decided_by": by,
+                              "reason": f"Episode summary matches {code} "
+                                        f"({sm['score']:.2f}, margin {sm['margin']:.2f}); "
+                                        "no reference transcript exists",
+                              "codes": [code],
+                              "targets": [{"path": dst_rel, "codes": [code]}],
+                              "selected": True})
+                moving.add(rel)
+                for cd in [code]:
+                    claimed_targets[cd] = rel
+                continue
 
         if sample_only and not manually_set:
             high = bool(chosen) and all(c[2] == "high" for c in chosen)
@@ -790,6 +827,11 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             reason = f.get("note") or "Needs a decision"
             if base.get("parts_note"):
                 reason += f" (multi-part check: {base['parts_note']})"
+            sm = f.get("summary_match") or {}
+            if sm.get("passes") and sm.get("mode") != "off":
+                reason += (f" — summary suggests {sm.get('code')} "
+                           f"({sm.get('score', 0):.2f}, margin {sm.get('margin', 0):.2f}"
+                           f"{'; ' + ', '.join(sm.get('terms') or []) if sm.get('terms') else ''})")
             if f.get("story_pair_overlap"):
                 ov = f["story_pair_overlap"]
                 reason += (f" — its reference is {ov['similarity']:.0%} the same as {ov['with']}'s "

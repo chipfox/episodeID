@@ -14,6 +14,7 @@ from .executor import (apply_plan, migrate_legacy_backup, sonarr_rescan, sonarr_
                        undo_apply)
 from .jobs import Cancelled, handler
 from .matcher import Matcher, classify, parse_filename_episodes, promote
+from . import summary as summary_match
 from .media_text import (cached_dialogue, detect_language, dialogue_text, duration, get_dialogue,
                          probe, sample_dialogue)
 from .planner import build_plan, list_videos
@@ -208,6 +209,12 @@ def job_fetch_refs(ctx, params):
     ctx.status("Cross-checking flagged OpenSubtitles references")
     result["names"] = check_release_names(db.get_series(series["id"]), ctx)
     result["verification"] = verify_flagged(db.get_series(series["id"]), ctx)
+    try:
+        current = db.get_series(series["id"]) or series
+        current_refs = {c: r["text"] for c, r in load_refs(current["tvdb_id"]).items()}
+        _summary_index_and_cal(current, current_refs, get_settings(), ctx)
+    except Exception as e:  # noqa: BLE001 — a reference fetch must not fail on calibration
+        ctx.log(f"Summary calibration after reference fetch failed: {e}")
     db.update_series(series["id"], episodes=series["episodes"])  # cached IMDb ids
     return result
 
@@ -610,7 +617,24 @@ def _sample_confirmation_pass(videos_by_rel: dict[str, Path], files: list[dict],
         ctx.log(f"  {f['status']:<16} {Path(f['rel']).name}: {f['note']}")
 
 
-def _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx):
+def _summary_index_and_cal(series: dict, refs: dict[str, str], s: dict, ctx):
+    """Build the summary index and keep the per-series calibration current."""
+    opts = dict(series.get("options") or {})
+    if not s["summary_match_enabled"] or (opts.get("summary_match") or "auto") == "off":
+        return None, None
+    index = summary_match.build_index(series, refs)
+    cal = summary_match.ensure_calibration(series, index, refs, s)
+    if opts.get("summary_calibration") != cal:
+        opts["summary_calibration"] = cal
+        db.update_series(series["id"], options=opts)
+        series["options"] = opts
+    ctx.log(f"Summary calibration: {summary_match.calibration_note(cal)}"
+            + ("" if cal.get("available") else " — suggestions only"))
+    return index, cal
+
+
+def _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx,
+                    summary_refs: dict | None = None):
     """Fetch every file's dialogue, returning (path, rel, dialogue, error) in file order.
 
     This is the only part of a scan that waits on the ASR server, and it is pure
@@ -627,7 +651,13 @@ def _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx):
         expected = parse_filename_episodes(v.name)
         try:
             dlg = None
-            if fast and not params.get("full") and _sample_eligible(v, expected, eps, runtime_min, s):
+            # A file whose episode has no reference transcript is a summary
+            # fallback candidate; a ten-minute sample cannot prove the whole
+            # episode, so read it full instead of sampling.
+            summary_full = bool(summary_refs is not None
+                                and any(c not in summary_refs for c in expected))
+            if (fast and not params.get("full") and not summary_full
+                    and _sample_eligible(v, expected, eps, runtime_min, s)):
                 dlg = sample_dialogue(v, ctx, allow_whisper=params.get("whisper", True),
                                       start=s["sample_start"],
                                       duration=s["sample_seconds"])
@@ -717,6 +747,8 @@ def job_scan(ctx, params):
     if not refs:
         ctx.log("No references yet — every file will need the AI fallback or a manual decision.")
 
+    summary_index, summary_cal = _summary_index_and_cal(series, refs, s, ctx)
+
     try:
         migrate_legacy_backup(series, ctx)
     except Exception as e:  # noqa: BLE001 — never block a scan on this
@@ -735,7 +767,9 @@ def job_scan(ctx, params):
         ctx.log(f"Fast path: sampling the first {int(s['sample_seconds']) // 60} min "
                 "of single-episode files; multi-episode and long files use the full matcher.")
     # 1. Read every file's dialogue (cached unless new or replaced).
-    read = _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx)
+    read = _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx,
+                           summary_refs=refs if (summary_index and summary_cal
+                                                 and summary_cal.get("available")) else None)
     # 2. Match. Word weights come from the references and every file's dialogue.
     background = [" ".join(c[2] for c in dlg["cues"]) for _v, _r, dlg, _e in read if dlg and dlg["cues"]]
     if params.get("only"):
@@ -824,6 +858,17 @@ def job_scan(ctx, params):
             pair = lex.story_pair_for(expected[0])
             if pair:
                 entry["story_pair_overlap"] = {"with": pair[0], "similarity": pair[1]}
+        if summary_index and summary_cal:
+            mode = summary_match.summary_mode(entry, refs, eps)
+            if mode != "off":
+                text = " ".join(c[2] for c in dlg["cues"] if len(c) >= 3)
+                sm = summary_match.match_file(text, entry, summary_index, summary_cal, mode, s)
+                if sm:
+                    entry["summary_match"] = sm
+                    if sm.get("passes"):
+                        ctx.log(f"  summary {rel}: {sm['code']} {sm['score']:.2f}"
+                                f" (margin {sm['margin']:.2f})"
+                                + (" — auto" if sm.get("auto") else " — suggestion"))
         if lex is not None and len(expected) == 1 and status in ("NO_MATCH", "LOW_CONFIDENCE"):
             twins = lex.conflicting(expected[0])
             if twins:
@@ -843,7 +888,17 @@ def job_scan(ctx, params):
     scanned = [f for f in files if f.get("scope") != "sample"]
     if scanned:
         _release_name_pass(series, scanned, ctx)
-        _titlecard_pass(series, scanned, eps, ctx, reread=bool(params.get("reread_cards")))
+        cards = scanned
+        if summary_index:
+            confirmed = [f for f in scanned
+                         if (f.get("summary_match") or {}).get("auto")
+                         and len(f.get("expected") or []) == 1]
+            if confirmed:
+                keep = {f["rel"] for f in confirmed}
+                cards = [f for f in scanned if f["rel"] not in keep]
+                ctx.log(f"Title cards: skipped {len(keep)} file(s) already settled by a "
+                        "calibrated summary match")
+        _titlecard_pass(series, cards, eps, ctx, reread=bool(params.get("reread_cards")))
         _title_card_swaps(scanned, ctx)
         for sw in reference_swaps(scanned, refs):
             ctx.log(f"References for {sw['codes'][0]} and {sw['codes'][1]} look swapped: title cards confirm each "

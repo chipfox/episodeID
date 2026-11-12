@@ -14,9 +14,11 @@ from pydantic import BaseModel
 
 from . import __version__, db, executor, jobs, llm, textsim, titlecard, tvdb
 from . import integrity, pipeline, redownload  # noqa: F401  (registers job handlers)
+from . import summary as summary_match
 from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, language_choices,
                      public_settings, safe_media_path, save_settings)
-from .references import (OpenSubtitles, clear_reference, ep_code, manual_dir, reference_grams)
+from .references import (OpenSubtitles, clear_reference, ep_code, load_refs, manual_dir,
+                         reference_grams)
 from .views import best_dialogue, episode_match, series_out
 from .media_text import VIDEO_EXTS
 
@@ -581,7 +583,7 @@ def series_options(sid: int, body: dict):
     opts = dict(s["options"] or {})
     for k in ("fandom_wiki", "fandom_page_pattern", "fandom_title_overrides",
               "include_specials", "name_in_files", "title_cards", "title_cards_scope",
-              "title_cards_trust"):
+              "title_cards_trust", "summary_match"):
         if k in body:
             opts[k] = body[k]
     if "fandom_wiki" in body:
@@ -608,6 +610,21 @@ def series_delete(sid: int):
     db.get_series(sid) or _404()
     db.delete_series(sid)
     return {"ok": True}
+
+
+@app.post("/api/series/{sid}/summary/calibrate")
+def summary_calibrate(sid: int):
+    """Force a fresh per-series summary calibration (the scan does this automatically)."""
+    s = db.get_series(sid) or _404()
+    refs = {c: r["text"] for c, r in load_refs(s["tvdb_id"]).items()}
+    index = summary_match.build_index(s, refs)
+    opts = dict(s.get("options") or {})
+    opts.pop("summary_calibration", None)
+    s["options"] = opts
+    cal = summary_match.ensure_calibration(s, index, refs, get_settings())
+    opts["summary_calibration"] = cal
+    db.update_series(sid, options=opts)
+    return {"calibration": cal, "note": summary_match.calibration_note(cal)}
 
 
 # ---------------------------------------------------------------- references

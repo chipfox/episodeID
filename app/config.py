@@ -71,6 +71,14 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     # both refuse to treat a match on one as proof of either.
     "reference_duplicate_similarity": (0.85, "REFERENCE_DUPLICATE_SIMILARITY", False),
     "reference_repair": (True, "REFERENCE_REPAIR", False),
+    # Summary matching: the fallback when an episode has no reference transcript.
+    # The index is fitted on reference dialogue; the gate is calibrated per series.
+    "summary_match_enabled": (True, "SUMMARY_MATCH_ENABLED", False),
+    "summary_min_refs": (20, "SUMMARY_MIN_REFS", False),
+    "summary_target_precision": (0.95, "SUMMARY_TARGET_PRECISION", False),
+    "summary_auto_precision": (0.99, "SUMMARY_AUTO_PRECISION", False),
+    "summary_default_min_score": (0.25, "SUMMARY_DEFAULT_MIN_SCORE", False),
+    "summary_default_min_margin": (0.05, "SUMMARY_DEFAULT_MIN_MARGIN", False),
     # Sampling: read the first N seconds of an eligible single-episode file instead of
     # the whole thing. These were once named decision_* (after the retired decision
     # model); the old keys and env names still work — see RENAMED / RENAMED_ENV below.

@@ -79,7 +79,7 @@ const KIND_BADGE = { rename: "b-info", split: "b-warn", join: "b-warn", aside: "
 // "ok" is the plan's word for a file that is already right; the row says so plainly,
 // because that is the word a person looks for.
 const KIND_LABEL = { ok: "correct" };
-const DECIDED_LABEL = { AI: "AI", you: "you set it", parts: "parts verified", "split files": "split release", "title card": "title card", "release name": "release name" };
+const DECIDED_LABEL = { AI: "AI", you: "you set it", parts: "parts verified", "split files": "split release", summary: "summary", "summary+title": "summary + title", "summary+ai": "summary + AI", "title card": "title card", "release name": "release name" };
 const ACTIONABLE = ["rename", "split", "join", "aside"];
 
 // -------------------------------------------------------------------- theme
@@ -264,6 +264,15 @@ function titleCardBadge(s) {
   return st.has_cards
     ? `<span class="badge b-ok" title="${esc(test + w)}">✓ Title cards (${st.hits}/${st.probed})</span>`
     : `<span class="badge" title="${esc(test)} — not used for this show. Turn them on under Series options if it does show titles.">No title cards (${st.hits}/${st.probed})</span>`;
+}
+
+// Whether summary matching has a usable per-series calibration.
+function summaryCalStatus(o) {
+  const c = o.summary_calibration;
+  if (!c) return "Not calibrated yet — it happens automatically on the next scan.";
+  if (!c.available) return `Not calibrated: ${esc(c.reason || "not enough references")}`;
+  const pct = (v) => `${Math.round((v || 0) * 100)}%`;
+  return `${c.n_refs} references · score ≥ ${(c.min_score || 0).toFixed(2)} · margin ≥ ${(c.min_margin || 0).toFixed(2)} · ${pct(c.precision_lb)} LB precision · ${pct(c.coverage)} coverage${c.at ? " · " + esc(c.at) : ""}`;
 }
 
 function seriesCardCounts(s) {
@@ -1106,12 +1115,14 @@ function rowHtml(it, eps, applied) {
   const src = it.text_source && it.text_source !== "none" ?
     `<div class="muted small">text: ${esc(it.text_source)}</div>` : "";
   const ovr = it.status === "MANUAL";
+  const sm = it.summary_match;
   const cur = (it.codes || it.suggested || []).join(" ");
   return `<tr>
     <td class="check">${actionable && !applied ? `<input type="checkbox" class="sel" data-id="${it.id}" ${it.selected ? "checked" : ""}>` : ""}</td>
     <td><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
       <span class="badge ${STATUS_BADGE[it.status] || ""}" title="${esc(it.note || "")}">${esc(it.status)}</span>
       ${it.decided_by && it.decided_by !== "dialogue" ? `<span class="badge ${it.decided_by === "AI" ? "b-ai" : "b-info"}" title="What settled this row${it.decided_confidence ? ` (${Math.round(it.decided_confidence * 100)}% confidence)` : ""}">${esc(DECIDED_LABEL[it.decided_by] || it.decided_by)}${it.decided_by === "AI" && it.decided_confidence ? ` ${Math.round(it.decided_confidence * 100)}%` : ""}</span>` : ""}
+      ${sm ? `<span class="badge ${sm.auto ? "b-ok" : "b-info"}" title="Episode summary ${sm.passes ? "passed the calibrated gate" : "is below the gate"}${sm.terms && sm.terms.length ? " · terms: " + esc(sm.terms.join(", ")) : ""}">summary ${esc(sm.code)} ${Math.round((sm.score || 0) * 100)}%${sm.auto ? " · auto" : ""}</span>` : ""}
       ${it.previous ? `<span class="badge b-info" title="Changed by the last scan — was ${esc(it.previous.kind)} (${esc(it.previous.status)}), now ${esc(it.kind)} (${esc(it.status)})">changed</span>` : ""}
       ${it.sample ? `<span class="badge" title="Settled from a sample of the first 10 minutes — open Compare… → Read whole file to check every line">sample</span>` : ""}
       ${it.ref_warning ? '<span class="badge b-warn">check reference</span>' : ""}
@@ -1683,6 +1694,15 @@ async function tabOptions() {
     <div class="row"><div class="small muted" style="flex:1">Title-card OCR is cached, so rescans normally reuse it. Use this after an update that changes how cards are read, or if a card was misread.</div>
       <button class="btn small" type="button" id="reread-cards">Rescan, re-reading title cards</button></div>
     </fieldset>
+    <fieldset><legend>Summary match</legend>
+    <div class="field"><label>Use episode summaries when no reference transcript exists</label>
+      <select name="summary_match">${[["auto", "Auto — calibrated fallback"], ["off", "Off"]].map(([v, t]) =>
+        `<option value="${v}" ${(o.summary_match || "auto") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+      <div class="hint">${summaryCalStatus(o)}</div></div>
+    <div class="row"><div class="small muted" style="flex:1">Calibrated automatically from this series' references;
+      used only when an episode has no reference transcript. Sidecar text is never auto-applied.</div>
+      <button class="btn small" type="button" id="recal-summary">Recalibrate now</button></div>
+    </fieldset>
     <fieldset><legend>Fandom wiki transcripts</legend>
     <div class="row" style="margin-bottom:6px"><div class="small" style="flex:1">${wikiStatus(o)}</div>
       <button class="btn small" type="button" id="find-wiki">Find automatically</button></div>
@@ -1712,13 +1732,21 @@ async function tabOptions() {
         include_specials: f.include_specials.checked, fandom_wiki: f.fandom_wiki.value.trim(),
         fandom_page_pattern: f.fandom_page_pattern.value.trim(), fandom_title_overrides: ov,
         title_cards: f.title_cards.value, title_cards_scope: f.title_cards_scope.value,
-        title_cards_trust: f.title_cards_trust.checked } });
+        title_cards_trust: f.title_cards_trust.checked, summary_match: f.summary_match.value } });
       toast("Saved");
     } catch (err) { fail(err); }
   };
   $("#reread-cards").onclick = () => {
     if (!confirm("Scan again, reading every title card from the video files instead of the cache? This takes longer than a normal scan.")) return;
     startJob("scan", { reread_cards: true }); toast("Rescanning — see the job log.");
+  };
+  $("recal-summary").onclick = async () => {
+    try {
+      const r = await api(`/api/series/${s.id}/summary/calibrate`, { method: "POST" });
+      state.series = await api(`/api/series/${s.id}`);
+      toast(r.note || "Summary calibration updated");
+      tabOptions();
+    } catch (err) { fail(err); }
   };
   loadBackup(s);
   $("#find-wiki").onclick = () => { startJob("fetch_refs", { find_wiki: true }); toast("Looking for the wiki — see the job log."); };
@@ -1868,6 +1896,15 @@ async function renderSettings() {
     ${sel("titlecard_hwaccel", "Video decoding", [["auto", "Auto — use a GPU if one is passed to the container"], ["cuda", "NVIDIA (NVDEC)"], ["vaapi", "Intel / AMD (VAAPI, needs /dev/dri)"], ["off", "CPU only"]],
       "Hardware decoding falls back to the CPU automatically if it doesn't work for a file.")}
     ${test("titlecards")}
+  </fieldset>
+  <fieldset><legend>Summary matching</legend>
+    <p class="muted small" style="margin-top:0">When an episode has no reference transcript, compare the file's
+      dialogue to the episode summaries. The per-series threshold is calibrated from that series' references;
+      a summary alone only auto-applies at the stricter auto gate, otherwise a title card must agree.</p>
+    ${cb("summary_match_enabled", "Enabled")}
+    ${f("summary_min_refs", "Minimum references", "Calibrate only when the series has at least this many reference transcripts.", "number")}
+    ${f("summary_target_precision", "Suggestion precision", "Wilson lower bound the suggestion gate must reach (0.95 = 95%).", "number")}
+    ${f("summary_auto_precision", "Auto precision", "Stricter lower bound for a summary to decide alone (0.99 = 99%).", "number")}
   </fieldset>
   <fieldset><legend>AI fallback (optional, OpenAI-compatible)</legend>
     <p class="muted small" style="margin-top:0">Only used for files the dialogue match can't settle, choosing among a short list of
