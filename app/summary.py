@@ -300,9 +300,17 @@ def match_file(text: str, f: dict, index: SummaryIndex, cal: dict, mode: str,
         mode = "suggest"
     passes = bool(cal.get("available") and m.score >= cal.get("min_score", 2)
                   and m.margin >= cal.get("min_margin", 2))
-    auto = bool(mode == "auto" and passes and cal.get("oof_ok", True)
-                and cal.get("precision_lb", 0) >=
-                float(settings.get("summary_auto_precision", 0.99)))
+    # Two safe automatic paths for a no-reference file:
+    # 1) the calibrated gate itself is strong enough for a summary to decide alone;
+    # 2) the summary strongly agrees with the name the file already has. That is
+    #    an "ok", never a rename, so a wrong summary cannot move a file.
+    same_name = bool(expected and m.code == expected[0])
+    strong_name = bool(same_name and m.score >=
+                       float(settings.get("summary_auto_min_score", 0.25))
+                       and m.margin >= float(settings.get("summary_auto_min_margin", 0.02)))
+    auto = bool(mode == "auto" and passes and (
+        (cal.get("oof_ok", True) and cal.get("precision_lb", 0) >=
+         float(settings.get("summary_auto_precision", 0.99))) or strong_name))
     return {"code": m.code, "score": round(m.score, 4),
             "margin": round(m.margin, 4), "terms": m.terms, "window": m.window,
             "calibrated": bool(cal.get("available")), "passes": passes,

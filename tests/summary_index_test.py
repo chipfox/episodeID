@@ -61,4 +61,13 @@ m = match_file("dolphin show balloons", {**base, "expected": ["S01E01"]}, idx, c
 assert m and m["passes"] and m["auto"] and m["code"] == "S01E01", m
 assert "dolphin" in m["terms"]
 assert "LB precision" in calibration_note(cal)
-print("summary_index_test: OK — 6 groups")
+# A weak gate can still auto an OK when the summary agrees with the filename,
+# but it must not auto a rename to a different episode.
+weak = {**cal, "precision_lb": 0.81, "oof_ok": False}
+same = match_file("dolphin show balloons", {**base, "expected": ["S01E01"]},
+                  idx, weak, "auto", settings)
+assert same and same["auto"] and same["passes"], same
+diff = match_file("dolphin show balloons", {**base, "expected": ["S01E02"]},
+                  idx, weak, "auto", settings)
+assert diff and not diff["auto"] and diff["passes"], diff
+print("summary_index_test: OK — 7 groups")

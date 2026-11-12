@@ -77,6 +77,8 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "summary_min_refs": (20, "SUMMARY_MIN_REFS", False),
     "summary_target_precision": (0.80, "SUMMARY_TARGET_PRECISION", False),
     "summary_auto_precision": (0.99, "SUMMARY_AUTO_PRECISION", False),
+    "summary_auto_min_score": (0.25, "SUMMARY_AUTO_MIN_SCORE", False),
+    "summary_auto_min_margin": (0.02, "SUMMARY_AUTO_MIN_MARGIN", False),
     "summary_default_min_score": (0.25, "SUMMARY_DEFAULT_MIN_SCORE", False),
     "summary_default_min_margin": (0.05, "SUMMARY_DEFAULT_MIN_MARGIN", False),
     # Sampling: read the first N seconds of an eligible single-episode file instead of

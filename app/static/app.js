@@ -1905,6 +1905,8 @@ async function renderSettings() {
     ${f("summary_min_refs", "Minimum references", "Calibrate only when the series has at least this many reference transcripts.", "number")}
     ${f("summary_target_precision", "Suggestion precision", "Wilson lower bound the suggestion gate must reach (0.80 = 80%; title-card agreement is still required for auto-apply).", "number")}
     ${f("summary_auto_precision", "Auto precision", "Stricter lower bound for a summary to decide alone (0.99 = 99%).", "number")}
+    ${f("summary_auto_min_score", "Name-agreement score", "A high summary score that agrees with the filename may settle an OK without a rename (0.25 default).", "number")}
+    ${f("summary_auto_min_margin", "Name-agreement margin", "Minimum top1-top2 margin for the filename-agreement path (0.02 default).", "number")}
   </fieldset>
   <fieldset><legend>AI fallback (optional, OpenAI-compatible)</legend>
     <p class="muted small" style="margin-top:0">Only used for files the dialogue match can't settle, choosing among a short list of

@@ -141,6 +141,22 @@ Rules:
 - If fewer than 20 references: `available=false`. Use the conservative default (`min_score=0.25`, `min_margin=0.05`) for suggestions only; auto-apply requires a title card or LLM agreement.
 - Log one line per calibration: `Summary calibration: 140 refs, score >= 0.20 and margin >= 0.04, 98.1% LB precision at 35% coverage`.
 
+### Implementation note — measured on the live libraries
+
+The planned 0.95 suggestion gate was not reachable on either library. At a 0.80
+Wilson lower-bound target:
+
+- Beavis: 90 gated / 140 references, 88.9% precision, 80.7% LB, 64% coverage,
+  70.8% out-of-fold LB.
+- X-Files: 157 gated / 218 references, 90.4% precision, 84.8% LB, 72% coverage,
+  84.8% out-of-fold LB.
+
+The shipped default is therefore a 0.80 suggestion gate. A summary alone still
+needs the 0.99 gate (which neither library reaches); the normal automatic path is
+a passing suggestion gate plus a title card, and a high-scoring summary that agrees
+with the file's existing name may settle an `ok` at 0.25 score / 0.02 margin —
+never a rename. The calibration schema is versioned so a stale gate is rebuilt.
+
 ### 3.5 Automatic fallback rule
 
 ```python
