@@ -78,6 +78,24 @@ def _ocr_gpu_available() -> bool:
         return False
 
 
+def _openvino_device_ok(devices: list[str]) -> bool:
+    want = _openvino_device()
+    if want == "AUTO":
+        return "GPU" in devices
+    if want in devices:
+        return True
+    if want.startswith("GPU") and "GPU" in devices:
+        # OpenVINO often exposes only the generic GPU id; ask the plugin whether the
+        # requested sub-device exists instead of letting ORT silently fall back to CPU.
+        try:
+            from openvino import Core
+            Core().get_property(want, "FULL_DEVICE_NAME")
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
 def _openvino_gpu_available() -> bool:
     if "openvino_gpu" in _accel:
         return bool(_accel["openvino_gpu"])
@@ -85,7 +103,7 @@ def _openvino_gpu_available() -> bool:
         from openvino import Core
         devices = list(Core().available_devices)
         _accel["openvino_devices"] = devices
-        _accel["openvino_gpu"] = "GPU" in devices
+        _accel["openvino_gpu"] = _openvino_device_ok(devices)
     except Exception as e:  # noqa: BLE001
         _accel["openvino_error"] = error_summary(e)
         _accel["openvino_gpu"] = False
