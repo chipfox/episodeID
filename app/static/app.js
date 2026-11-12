@@ -1903,7 +1903,7 @@ async function renderSettings() {
       a summary alone only auto-applies at the stricter auto gate, otherwise a title card must agree.</p>
     ${cb("summary_match_enabled", "Enabled")}
     ${f("summary_min_refs", "Minimum references", "Calibrate only when the series has at least this many reference transcripts.", "number")}
-    ${f("summary_target_precision", "Suggestion precision", "Wilson lower bound the suggestion gate must reach (0.95 = 95%).", "number")}
+    ${f("summary_target_precision", "Suggestion precision", "Wilson lower bound the suggestion gate must reach (0.80 = 80%; title-card agreement is still required for auto-apply).", "number")}
     ${f("summary_auto_precision", "Auto precision", "Stricter lower bound for a summary to decide alone (0.99 = 99%).", "number")}
   </fieldset>
   <fieldset><legend>AI fallback (optional, OpenAI-compatible)</legend>

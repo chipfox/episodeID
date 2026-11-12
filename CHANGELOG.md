@@ -9,9 +9,12 @@ Changelog; release image tags identify their source commit.
 - **Episode summaries are a calibrated fallback when a reference transcript is
   missing.** A per-series TF-IDF index is fitted on the available reference dialogue
   and queried with `title + cleaned overview` (the Beavis music-video block is
-  stripped). Calibration selects a score/margin gate whose Wilson 95% lower bound
-  reaches the configured target and reports a 5-fold out-of-fold validation; it is
-  refreshed automatically when references or summaries change. When an episode has
+  stripped). Calibration selects a score/margin suggestion gate from the top-1 candidate's
+  score and margin (default Wilson lower-bound target 0.80, because the live
+  libraries cannot support 0.95 without a tiny coverage); it also reports 5-fold
+  out-of-fold precision. A summary alone still requires the 0.99 gate, so the
+  practical automatic path is a passing suggestion gate plus an agreeing title card.
+  Calibration is refreshed automatically when references or summaries change. When an episode has
   no reference, a full read of the file's own ASR/embedded dialogue is scored against
   every summary. A summary alone can settle a name only at the stricter auto gate;
   otherwise a title card must agree, and a sidecar is always review-only. Rows carry

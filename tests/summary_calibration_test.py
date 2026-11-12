@@ -36,6 +36,7 @@ assert not cal_small["available"] and "need 20" in cal_small["reason"], cal_smal
 
 # Any reference or summary change invalidates the stored gate.
 assert not calibration_stale(cal, REFS, EPS)
+assert calibration_stale({**cal, "version": 1}, REFS, EPS)
 changed_refs = dict(REFS)
 changed_refs["S01E01"] += " an added line"
 assert calibration_stale(cal, changed_refs, EPS)

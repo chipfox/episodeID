@@ -24,6 +24,7 @@ into is it its me my no not of on or our she so that the their them they this to
 was we were what when which who will with you your""".split())
 _WINDOW_WORDS = 400
 _WINDOW_STEP = 200
+CALIBRATION_VERSION = 2
 
 
 def clean_overview(text: str) -> str:
@@ -163,9 +164,14 @@ def _rows(index: SummaryIndex, refs: dict[str, str]) -> list[tuple[float, float,
         scores = index.score(refs[code])
         if code not in scores:
             continue
-        true = scores[code]
-        other = max((v for c, v in scores.items() if c != code), default=0.0)
-        out.append((true, true - other, max(scores, key=scores.get) == code))
+        order = sorted(scores, key=lambda c: (-scores[c], c))
+        top = order[0]
+        top_score = scores[top]
+        margin = top_score - scores[order[1]] if len(order) > 1 else 0.0
+        # Gate on what production sees: the top-1 candidate's score and margin.
+        # Using the true episode's score here would leak the answer and make the
+        # calibration look perfect while selecting only already-correct rows.
+        out.append((top_score, margin, top == code))
     return out
 
 
@@ -199,7 +205,7 @@ def calibrate(index: SummaryIndex, refs: dict[str, str], episodes: dict[str, dic
     a gate that does not survive it is marked unavailable rather than trusted.
     """
     usable = [c for c in index.codes if c in refs]
-    base = {"target": target, "n_refs": len(usable),
+    base = {"version": CALIBRATION_VERSION, "target": target, "n_refs": len(usable),
             "refs_fp": refs_fingerprint(refs),
             "summaries_fp": summaries_fingerprint(episodes)}
     if len(usable) < min_refs:
@@ -228,17 +234,21 @@ def calibrate(index: SummaryIndex, refs: dict[str, str], episodes: dict[str, dic
         oof_n += len(gated)
         oof_hit += sum(1 for r in gated if r[2])
     oof_lb = wilson_lower(oof_hit, oof_n) if oof_n else 0.0
-    out = {**base, "available": oof_n > 0 and oof_lb >= target,
+    # The gate is usable for suggestions even when the out-of-fold estimate is
+    # weaker than the target: title-card agreement is the independent check for
+    # auto-apply, and the OOF number is shown so the UI does not overstate it.
+    out = {**base, "available": True,
            "oof_precision": (oof_hit / oof_n) if oof_n else 0.0,
-           "oof_lb": oof_lb, "oof_gated": oof_n, **gate}
-    if not out["available"]:
-        out["reason"] = "the chosen gate did not survive 5-fold out-of-fold validation"
+           "oof_lb": oof_lb, "oof_gated": oof_n,
+           "oof_ok": oof_n > 0 and oof_lb >= target,
+           **gate}
     return out
 
 
 def calibration_stale(cal: dict | None, refs: dict[str, str],
                       episodes: dict[str, dict]) -> bool:
-    return (not cal or cal.get("refs_fp") != refs_fingerprint(refs)
+    return (not cal or cal.get("version") != CALIBRATION_VERSION
+            or cal.get("refs_fp") != refs_fingerprint(refs)
             or cal.get("summaries_fp") != summaries_fingerprint(episodes))
 
 
@@ -290,7 +300,8 @@ def match_file(text: str, f: dict, index: SummaryIndex, cal: dict, mode: str,
         mode = "suggest"
     passes = bool(cal.get("available") and m.score >= cal.get("min_score", 2)
                   and m.margin >= cal.get("min_margin", 2))
-    auto = bool(mode == "auto" and passes and cal.get("precision_lb", 0) >=
+    auto = bool(mode == "auto" and passes and cal.get("oof_ok", True)
+                and cal.get("precision_lb", 0) >=
                 float(settings.get("summary_auto_precision", 0.99)))
     return {"code": m.code, "score": round(m.score, 4),
             "margin": round(m.margin, 4), "terms": m.terms, "window": m.window,
