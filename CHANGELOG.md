@@ -20,6 +20,15 @@ Changelog; release image tags identify their source commit.
   the normal per-series test/enable flow. Pinned by
   `tests/titlecard_ocr_backend_test.py` and `tests/titlecard_partial_test.py`.
 
+- **Entrypoint keeps the render group when dropping privileges.** `setpriv
+  --clear-groups` removed Docker’s `group_add` GID, so the app user (PUID 99) could
+  see only the OpenVINO CPU device while a root `docker exec` saw the GPU. The
+  entrypoint now derives the GID from `/dev/dri/renderD128` (or `RENDER_GID`) and
+  passes it through `setpriv`; the live app reports `OCR: Intel GPU (OpenVINO: GPU)`.
+  The title-card cache tag is now `v3`, so old CPU cache entries cannot be reused
+  as GPU results. AV1 title-card decode still falls back to CPU on this VAAPI stack;
+  H.264/HEVC hardware decode remains codec/format dependent.
+
 ## [Unreleased] — 2026-11-11
 
 ### Added
