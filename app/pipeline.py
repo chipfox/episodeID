@@ -889,7 +889,8 @@ def job_scan(ctx, params):
     if scanned:
         _release_name_pass(series, scanned, ctx)
         cards = scanned
-        if summary_index:
+        if (summary_index and s["titlecard_enabled"]
+                and (series.get("options") or {}).get("title_cards", "auto") != "off"):
             confirmed = [f for f in scanned
                          if (f.get("summary_match") or {}).get("auto")
                          and len(f.get("expected") or []) == 1]
