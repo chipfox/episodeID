@@ -59,7 +59,7 @@ cal = {"available": True, "min_score": 0.05, "min_margin": 0.0,
 settings = {"summary_auto_precision": 0.99}
 m = match_file("dolphin show balloons", {**base, "expected": ["S01E01"]}, idx, cal, "auto", settings)
 assert m and m["passes"] and m["auto"] and m["code"] == "S01E01", m
-assert "dolphin" in m["terms"]
+assert "dolphin" in m["terms"] and "dolphin" in m["summary"]
 assert "LB precision" in calibration_note(cal)
 # A weak gate can still auto an OK when the summary agrees with the filename,
 # but it must not auto a rename to a different episode.
@@ -70,4 +70,9 @@ assert same and same["auto"] and same["passes"], same
 diff = match_file("dolphin show balloons", {**base, "expected": ["S01E02"]},
                   idx, weak, "auto", settings)
 assert diff and not diff["auto"] and diff["passes"], diff
-print("summary_index_test: OK — 7 groups")
+# Uncalibrated series: conservative suggestion only, never auto.
+no_cal = {"available": False}
+m = match_file("dolphin show balloons", {**base, "expected": ["S01E01"]},
+               idx, no_cal, "auto", settings)
+assert m and m["passes"] and not m["auto"] and not m["calibrated"], m
+print("summary_index_test: OK — 8 groups")

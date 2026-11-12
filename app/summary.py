@@ -298,8 +298,15 @@ def match_file(text: str, f: dict, index: SummaryIndex, cal: dict, mode: str,
     expected = f.get("expected") or []
     if mode == "auto" and expected and expected[0] not in index.codes:
         mode = "suggest"
-    passes = bool(cal.get("available") and m.score >= cal.get("min_score", 2)
-                  and m.margin >= cal.get("min_margin", 2))
+    calibrated = bool(cal.get("available"))
+    if calibrated:
+        passes = bool(m.score >= cal.get("min_score", 2)
+                      and m.margin >= cal.get("min_margin", 2))
+    else:
+        # A series with too few references to calibrate can still show a
+        # conservative suggestion; it never auto-applies.
+        passes = bool(m.score >= float(settings.get("summary_default_min_score", 0.25))
+                      and m.margin >= float(settings.get("summary_default_min_margin", 0.05)))
     # Two safe automatic paths for a no-reference file:
     # 1) the calibrated gate itself is strong enough for a summary to decide alone;
     # 2) the summary strongly agrees with the name the file already has. That is
@@ -308,12 +315,14 @@ def match_file(text: str, f: dict, index: SummaryIndex, cal: dict, mode: str,
     strong_name = bool(same_name and m.score >=
                        float(settings.get("summary_auto_min_score", 0.25))
                        and m.margin >= float(settings.get("summary_auto_min_margin", 0.02)))
-    auto = bool(mode == "auto" and passes and (
+    auto = bool(mode == "auto" and calibrated and passes and (
         (cal.get("oof_ok", True) and cal.get("precision_lb", 0) >=
          float(settings.get("summary_auto_precision", 0.99))) or strong_name))
+    summary_text = clean_overview(index.episodes[m.code].get("overview") or "")[:500]
     return {"code": m.code, "score": round(m.score, 4),
             "margin": round(m.margin, 4), "terms": m.terms, "window": m.window,
-            "calibrated": bool(cal.get("available")), "passes": passes,
+            "summary": summary_text,
+            "calibrated": calibrated, "passes": passes,
             "auto": auto, "mode": mode, "fallback": True,
             "calibration": {k: cal.get(k) for k in
                             ("target", "min_score", "min_margin", "precision",
