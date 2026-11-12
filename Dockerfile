@@ -36,7 +36,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && pip uninstall -y onnxruntime \
- && pip install --no-cache-dir "onnxruntime-openvino==1.24.1" "openvino>=2026.0,<2027"
+ && pip install --no-cache-dir "onnxruntime-openvino==1.24.1" "openvino==2026.4.1"
 # Which build this is — shown next to the version in the web UI's header (set by CI;
 # placed here so changing it doesn't throw away the pip layer above).
 ARG GIT_SHA=""
