@@ -676,7 +676,7 @@ def _ocr_frame(img) -> list[list]:
 
 def _cache_path(video: Path, start: float, length: float, fps: float,
                 mode: str = "full") -> Path:
-    tag = f"v2|{start:.0f}|{length:.0f}|{fps}|{mode}"
+    tag = f"v3|{start:.0f}|{length:.0f}|{fps}|{mode}"
     spec = hashlib.sha1(tag.encode()).hexdigest()[:10]
     return CACHE_DIR / "titlecards" / f"{_cache_key(video)}_{spec}.json"
 
