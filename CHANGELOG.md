@@ -3,6 +3,23 @@
 Tracks this fork's scan, matcher, and reference-quality changes. Format follows Keep a
 Changelog; release image tags identify their source commit.
 
+## [Unreleased] — 2026-11-12
+
+### Added
+- **Title-card OCR can use the Intel GPU through OpenVINO.** The OCR backend selector
+  now prefers NVIDIA CUDA when present, then OpenVINO GPU, then CPU;
+  `titlecard_ocr_device=openvino` forces the Intel path and
+  `titlecard_openvino_device` selects `GPU`, `GPU.0`, `GPU.1`, or `AUTO`. The image
+  carries a pinned Intel compute-runtime/IGC/Level Zero stack plus
+  `onnxruntime-openvino`; OpenVINO runs FP32 because that matched the CPU OCR output
+  on every test frame while the default FP16 dropped a word. The OCR cache signature
+  includes the backend and OpenVINO version, so a CPU read is never reused as a GPU
+  read; a GPU initialization/runtime failure falls back to CPU once. On the Iris Xe
+  96 EU this measured **78 ms/frame vs 1,344 ms** on CPU (about 17×) with identical
+  text, so a discrete Arc is not required. Title cards remain disabled globally until
+  the normal per-series test/enable flow. Pinned by
+  `tests/titlecard_ocr_backend_test.py` and `tests/titlecard_partial_test.py`.
+
 ## [Unreleased] — 2026-11-11
 
 ### Added

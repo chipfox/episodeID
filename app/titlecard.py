@@ -39,9 +39,8 @@ FRAME_H = 360           # …and roughly this height (16:9)
 MIN_BOX_FRAC = 0.035    # lines this tall (fraction of frame height) can be part of a title…
 MIN_TITLE_FRAC = 0.045  # …but every read needs at least one line this tall (ignores small signs)
 MIN_CONF = 0.75         # OCR confidence for a line to be considered
-# Identifies how cached OCR was produced (engine settings, frame size). Cached windows
-# from other settings that found no complete title are read again.
-OCR_SIG = f"rapidocr-1|{FRAME_W}x{FRAME_H}|det-min-{FRAME_H}"
+# Cached OCR identifies the engine/backend that produced it; a CPU result must not be
+# reused as if it were a GPU result. The actual signature is built by _ocr_sig().
 RECUR_TOL = 8           # seconds either side of where recurring intro text appears
 ZOOM_MIN_H = 0.09       # a line this tall that matched nothing gets a closer look…
 ZOOM_FPS = 4.0          # …at this many frames a second, around it
@@ -79,6 +78,85 @@ def _ocr_gpu_available() -> bool:
         return False
 
 
+def _openvino_gpu_available() -> bool:
+    if "openvino_gpu" in _accel:
+        return bool(_accel["openvino_gpu"])
+    try:
+        from openvino import Core
+        devices = list(Core().available_devices)
+        _accel["openvino_devices"] = devices
+        _accel["openvino_gpu"] = "GPU" in devices
+    except Exception as e:  # noqa: BLE001
+        _accel["openvino_error"] = error_summary(e)
+        _accel["openvino_gpu"] = False
+    return bool(_accel["openvino_gpu"])
+
+
+def _openvino_device() -> str:
+    return str(get_settings().get("titlecard_openvino_device") or "GPU")
+
+
+def _ocr_choice() -> tuple[str, str]:
+    want = str(get_settings().get("titlecard_ocr_device") or "auto")
+    if want == "cpu" or _accel.get("force_cpu"):
+        return "cpu", "CPU"
+    if want == "openvino":
+        if _openvino_gpu_available():
+            return "openvino", f"Intel GPU (OpenVINO: {_openvino_device()})"
+        return "cpu", "CPU"
+    if _ocr_gpu_available():
+        return "cuda", "NVIDIA GPU (CUDA)"
+    if want == "auto" and _openvino_gpu_available():
+        return "openvino", f"Intel GPU (OpenVINO: {_openvino_device()})"
+    return "cpu", "CPU"
+
+
+def _ocr_sig() -> str:
+    backend, _label = _ocr_choice()
+    version = ""
+    if backend == "openvino":
+        try:
+            from importlib.metadata import version as pkg_version
+            version = f"|openvino-{pkg_version('openvino')}"
+        except Exception:  # noqa: BLE001
+            pass
+    return f"rapidocr-2|{backend}{version}|{FRAME_W}x{FRAME_H}|det-min-{FRAME_H}"
+
+
+def _install_openvino_provider() -> bool:
+    """Teach RapidOCR's ONNX Runtime sessions to try the OpenVINO GPU first."""
+    try:
+        from onnxruntime import get_available_providers
+        if "OpenVINOExecutionProvider" not in get_available_providers():
+            _accel["openvino_error"] = "onnxruntime has no OpenVINOExecutionProvider"
+            return False
+        from rapidocr_onnxruntime.utils.infer_engine import OrtInferSession
+        original = OrtInferSession._get_ep_list
+        device = _openvino_device()
+
+        def patched(self):
+            eps = original(self)
+            # FP16 is the ORT-OpenVINO default; FP32 matched the CPU OCR output on
+            # every title-card frame in the spike, while FP16 dropped a word.
+            eps.insert(0, ("OpenVINOExecutionProvider",
+                           {"device_type": device, "precision": "FP32"}))
+            return eps
+
+        OrtInferSession._get_ep_list = patched
+        _accel["openvino_patch"] = (OrtInferSession, original)
+        return True
+    except Exception as e:  # noqa: BLE001
+        _accel["openvino_error"] = error_summary(e)
+        return False
+
+
+def _remove_openvino_provider() -> None:
+    patch = _accel.pop("openvino_patch", None)
+    if patch:
+        cls, original = patch
+        cls._get_ep_list = original
+
+
 def _engine():
     global _ocr
     if _ocr is None:
@@ -86,16 +164,26 @@ def _engine():
             from rapidocr_onnxruntime import RapidOCR
         except Exception as e:  # noqa: BLE001
             raise TitleCardUnavailable(f"OCR engine not installed ({e})")
-        want = get_settings()["titlecard_ocr_device"]
-        gpu = want != "cpu" and not _accel.get("force_cpu") and _ocr_gpu_available()
+        backend, label = _ocr_choice()
+        if backend == "openvino" and not _install_openvino_provider():
+            backend, label = "cpu", "CPU"
         # Frames are already small (640x360). RapidOCR's default upscales them to a
         # 736 px short side before text detection, which more than doubles the work
         # and doesn't help with large title text.
         kw = {"det_limit_side_len": FRAME_H, "det_limit_type": "min"}
-        if gpu:
+        if backend == "cuda":
             kw.update(det_use_cuda=True, cls_use_cuda=True, rec_use_cuda=True)
-        _ocr = RapidOCR(**kw)
-        _accel["ocr"] = "NVIDIA GPU (CUDA)" if gpu else "CPU"
+        try:
+            _ocr = RapidOCR(**kw)
+        except Exception as e:
+            if backend != "openvino":
+                raise
+            _remove_openvino_provider()
+            _accel["ocr_gpu_error"] = error_summary(e)
+            _accel["force_cpu"] = True
+            label = "CPU"
+            _ocr = RapidOCR(**kw)
+        _accel["ocr"] = label
     return _ocr
 
 
@@ -550,11 +638,12 @@ def _ocr_frame(img) -> list[list]:
         try:
             res, _ = _engine()(img, use_cls=False)
         except Exception as e:  # noqa: BLE001
-            if _accel.get("ocr", "").startswith("NVIDIA"):
+            if _accel.get("ocr", "").startswith(("NVIDIA", "Intel")):
                 # GPU OCR loaded but can't run here (driver/GPU too old for the bundled
-                # CUDA libraries, a missing library, out of memory…): use the CPU.
+                # libraries, a missing library, out of memory…): use the CPU.
                 _accel["ocr_gpu_error"] = error_summary(e)
                 _accel["force_cpu"] = True
+                _remove_openvino_provider()
                 _ocr = None
                 res, _ = _engine()(img, use_cls=False)
             else:
@@ -612,7 +701,7 @@ def _reuse_cached(data: dict, index: TitleIndex, fps: float,
     frames = data["frames"]
     for fr in frames:
         fr["hit"] = index.match_frame(fr["lines"], fr["t"] - ep_start)
-    if data.get("ocr") != OCR_SIG and not any(fr["hit"] and not fr["hit"]["partial"] for fr in frames):
+    if data.get("ocr") != _ocr_sig() and not any(fr["hit"] and not fr["hit"]["partial"] for fr in frames):
         return None  # read by an older version that found no title here: read it again
     if data.get("complete", True):
         return frames
@@ -714,7 +803,7 @@ def _scan_pass(video: Path, start: float, length: float, index: TitleIndex,
     if mode == "full":
         frames = sorted(frames + _zoom(video, frames, index, ctx, ep_start, expected), key=lambda f: f["t"])
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({"complete": complete, "stopped_at": stopped_at, "ocr": OCR_SIG,
+    cache.write_text(json.dumps({"complete": complete, "stopped_at": stopped_at, "ocr": _ocr_sig(),
                                  "zoomed": mode == "full",
                                  "frames": [{"t": f["t"], "lines": f["lines"]} for f in frames]}))
     return frames

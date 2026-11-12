@@ -4,6 +4,13 @@
 
 **Goal:** Move title-card OCR from the i9-12900H CPU to the Iris Xe 96 EU iGPU via OpenVINO, while keeping CPU as a deterministic fallback and preserving OCR results.
 
+> **Status (2026-11-12): implemented on `feat/openvino-ocr`.** Spike A
+> (`onnxruntime-openvino` 1.24.1 + OpenVINO 2026.4.1, provider patch with
+> `precision=FP32`) is the chosen path. On the Iris Xe it measured **78 ms/frame
+> steady-state vs 1,344 ms CPU (~17×)** with identical OCR text on the five test
+> frames. The image includes the pinned Intel compute runtime. No Arc A310 move is
+> needed; title cards remain disabled globally until the normal test/enable flow.
+
 **Architecture:** The compose stack now passes `/dev/dri` into the EpisodeID container and VAAPI decode is confirmed. OCR still runs on CPU because `rapidocr_onnxruntime` only knows CPU/CUDA/DirectML and the image has no OpenVINO runtime. Implement a small OCR backend selector in `app/titlecard.py`: CUDA when present, then OpenVINO GPU, then CPU. Use a short spike to choose between `onnxruntime-openvino` with a provider patch and RapidOCR 3.x's OpenVINO engine (which currently hardcodes CPU and needs a device patch). Cache the OCR backend/device in `OCR_SIG` so CPU and GPU reads cannot be mixed silently.
 
 **Tech stack:** Python 3.12 slim image, OpenVINO, Intel OpenCL/Level Zero runtime, RapidOCR, ffmpeg VAAPI, Docker/Portainer stack 190, Iris Xe (iGPU) or Arc A310 later.

@@ -1892,7 +1892,9 @@ async function renderSettings() {
     ${f("titlecard_fps", "Frames per second", "1 is enough for cards shown for 2+ seconds.")}
     ${cb("titlecard_vision", "Use a vision model when OCR can't settle a card", "Off by default. OCR is always tried first; this sends up to 4 frames to the AI endpoint only when OCR read no title card, only part of one, or one that disagrees with both the filename and the dialogue. It needs a vision-capable model: set <b>Vision model</b> below (e.g. a qwen2.5-vl build in Ollama). If that is blank, the ordinary AI model is used — and a text-only model cannot see the frames. Its answer only supplies the title text; EpisodeID still decides which episode that is.")}
     ${f("llm_vision_model", "Vision model", "Used only for title-card frames. Blank → the AI model above, which is usually text-only.")}
-    ${sel("titlecard_ocr_device", "OCR on", [["auto", "Auto — NVIDIA GPU when available (-cuda image)"], ["cpu", "CPU"]])}
+    ${sel("titlecard_ocr_device", "OCR on", [["auto", "Auto — NVIDIA GPU or Intel GPU (OpenVINO) when available"], ["openvino", "Intel GPU (OpenVINO)"], ["cpu", "CPU"]])}
+    ${sel("titlecard_openvino_device", "OpenVINO device", [["GPU", "GPU (default)"], ["GPU.0", "GPU.0"], ["GPU.1", "GPU.1 (second Intel GPU)"], ["AUTO", "AUTO"]],
+      "Only used by the OpenVINO OCR backend. GPU is the default; GPU.1 selects a second Intel GPU.")}
     ${sel("titlecard_hwaccel", "Video decoding", [["auto", "Auto — use a GPU if one is passed to the container"], ["cuda", "NVIDIA (NVDEC)"], ["vaapi", "Intel / AMD (VAAPI, needs /dev/dri)"], ["off", "CPU only"]],
       "Hardware decoding falls back to the CPU automatically if it doesn't work for a file.")}
     ${test("titlecards")}

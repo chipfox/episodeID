@@ -63,7 +63,8 @@ SCHEMA: dict[str, tuple[object, str, bool]] = {
     "titlecard_scan_seconds": (180, "TITLECARD_SCAN_SECONDS", False),
     "titlecard_fps": (1.0, "TITLECARD_FPS", False),
     "titlecard_vision": (False, "TITLECARD_VISION", False),
-    "titlecard_ocr_device": ("auto", "TITLECARD_OCR_DEVICE", False),   # auto | cpu
+    "titlecard_ocr_device": ("auto", "TITLECARD_OCR_DEVICE", False),   # auto | cpu | openvino
+    "titlecard_openvino_device": ("GPU", "TITLECARD_OPENVINO_DEVICE", False),  # GPU | GPU.0 | GPU.1 | AUTO
     "titlecard_hwaccel": ("auto", "TITLECARD_HWACCEL", False),         # auto | off | cuda | vaapi
     "llm_vision_model": ("", "LLM_VISION_MODEL", False),
     # Two references this similar are one transcript filed twice (a wiki page under
