@@ -81,6 +81,8 @@ const KIND_BADGE = { rename: "b-info", split: "b-warn", join: "b-warn", aside: "
 const KIND_LABEL = { ok: "correct" };
 const DECIDED_LABEL = { AI: "AI", you: "you set it", parts: "parts verified", "split files": "split release", summary: "summary", "summary+title": "summary + title", "summary+ai": "summary + AI", "title card": "title card", "release name": "release name" };
 const ACTIONABLE = ["rename", "split", "join", "aside"];
+const METHOD_BADGE = { ok: "b-ok", warn: "b-warn", fail: "b-bad", skip: "", info: "b-info" };
+const METHOD_ICON = { ok: "✓", warn: "!", fail: "✕", skip: "–", info: "i" };
 
 // -------------------------------------------------------------------- theme
 // Auto (follow the system) → Light → Dark. Saved in this browser only.
@@ -1119,6 +1121,15 @@ async function referenceDialog(code) {
   $("#ref-close", box).onclick = () => closeModal();
 }
 
+function methodsHtml(methods) {
+  if (!methods || !methods.length) return "";
+  return `<div class="methods">${methods.map((m) => {
+    const icon = m.key === "duration" ? "⏱" : (METHOD_ICON[m.state] || "–");
+    const text = m.result ? ` ${esc(m.result)}` : "";
+    return `<span class="badge ${METHOD_BADGE[m.state] || ""} method" title="${esc(m.detail || m.result || "")}">${icon} <b>${esc(m.label)}</b>${text}</span>`;
+  }).join("")}</div>`;
+}
+
 function rowHtml(it, eps, applied) {
   const targets = (it.targets || []).map((t) =>
     `<div class="arrow">↳ <span class="path">${esc(t.path.replace(/^(\.\.\/)+/, ""))}</span>${t.duplicate ? ' <span class="badge b-bad">duplicate</span>' : ""}</div>`).join("");
@@ -1142,6 +1153,7 @@ function rowHtml(it, eps, applied) {
       ${((state.series.file_check || {}).imports || []).some((x) => (it.sources || [it.source]).includes(x.rel)) ? '<span class="badge b-bad" title="Sonarr imported this file recently and its content doesn\'t match its name">new download</span>' : ""}
       ${integrityBadge(it)}
       ${(it.sources || [it.source]).map((p) => `<div class="path" style="margin-top:4px">${it.sources ? "+ " : ""}${esc(p)}</div>`).join("")}${targets}
+      ${methodsHtml(it.methods)}
       ${integrityNote(it)}
       ${it.kind === "split" && it.cuts ? `<div class="small" style="margin-top:2px"><span class="badge b-info">cut points chosen</span>
         ${it.cuts.map((c) => c == null ? "auto" : fmtCut(c)).join(", ")}</div>` : ""}

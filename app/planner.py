@@ -354,7 +354,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 15
+PLAN_VERSION = 16
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -659,6 +659,120 @@ def _one_per_code(chosen: list[tuple[dict, str, str, bool]]) -> list[tuple[dict,
     return sorted(best.values(), key=lambda c: float(c[0].get("start") or 0))
 
 
+def _clock(seconds) -> str:
+    seconds = max(0, int(float(seconds or 0)))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
+                       parts_why: str) -> list[dict]:
+    """What each detector did for this file, for the plan UI.
+
+    'ok' = ran and produced a result; 'warn' = ran but inconclusive; 'fail' = could
+    not run; 'skip' = not applicable; 'info' = metadata only.
+    """
+    def method(key, label, state, result="", detail=""):
+        return {"key": key, "label": label, "state": state,
+                "result": result, "detail": detail}
+
+    methods: list[dict] = []
+    opts = series.get("options") or {}
+    source = str(f.get("text_source") or "")
+    ev = f.get("evidence") or {}
+    top = ev.get("top1")
+    score = float(ev.get("top1_score") or 0)
+    segs = f.get("segments") or []
+
+    if not source or source == "none":
+        methods.append(method("dialogue", "Dialogue", "fail", "no text",
+                              "No subtitles or transcript were available."))
+    elif source.startswith("sidecar "):
+        methods.append(method("dialogue", "Dialogue", "warn",
+                              f"{top} {score:.0%}" if top else "sidecar text",
+                              "Sidecar subtitles are third-party text and are not trusted as proof."))
+    elif top:
+        state = "warn" if ev.get("conflicted") else "ok"
+        detail = (f"{int(ev.get('windows') or 0)} windows, "
+                  f"{int(ev.get('words') or 0)} words"
+                  + (f"; conflicts with {ev.get('twin')}" if ev.get("twin") else ""))
+        methods.append(method("dialogue", "Dialogue", state, f"{top} {score:.0%}", detail))
+    else:
+        methods.append(method("dialogue", "Dialogue", "warn", "ran, no match",
+                              "The file's dialogue did not match a reference."))
+
+    cards = f.get("title_cards") or []
+    if cards:
+        full = [c for c in cards if c.get("code")]
+        c = full[0] if full else cards[0]
+        codes = list(dict.fromkeys(x.get("code") for x in full if x.get("code")))
+        result = f"{', '.join(codes) or 'read'} @ {_clock(c.get('time') or 0)}"
+        if len(cards) > 1:
+            result += f" (+{len(cards) - 1})"
+        methods.append(method("title_card", "Title card", "ok", result,
+                              f"OCR read {len(cards)} title-card hit(s)."))
+    elif not s.get("titlecard_enabled"):
+        methods.append(method("title_card", "Title card", "fail", "disabled",
+                              "Title-card detection is disabled globally."))
+    elif opts.get("title_cards", "auto") == "off":
+        methods.append(method("title_card", "Title card", "fail", "series off",
+                              "Title-card detection is off for this series."))
+    elif f.get("title_scan"):
+        windows = f.get("title_scan") or []
+        span = f"{_clock(windows[0][0])}–{_clock(windows[-1][1])}" if windows else "the file"
+        methods.append(method("title_card", "Title card", "warn", "no card",
+                              f"Scanned {span}; no title card matched an episode."))
+    else:
+        methods.append(method("title_card", "Title card", "fail", "not run",
+                              "No title-card pass ran for this file."))
+
+    sm = f.get("summary_match") or {}
+    if sm and sm.get("mode") != "off":
+        code, score = sm.get("code"), float(sm.get("score") or 0)
+        methods.append(method("summary", "Summary",
+                              "ok" if sm.get("passes") else "warn",
+                              f"{code} {score:.0%}" if code else "ran, no result",
+                              ("auto-accepted" if sm.get("auto") else "suggestion")
+                              + (f"; margin {float(sm.get('margin') or 0):.2f}")))
+    elif not s.get("summary_match_enabled"):
+        methods.append(method("summary", "Summary", "fail", "disabled",
+                              "Episode summaries are disabled globally."))
+    elif opts.get("summary_match", "auto") == "off":
+        methods.append(method("summary", "Summary", "fail", "series off",
+                              "Episode summaries are off for this series."))
+    else:
+        methods.append(method("summary", "Summary", "warn", "not available",
+                              "No calibrated summary result for this file."))
+
+    if parts:
+        methods.append(method("parts", "Parts", "ok", "verified",
+                              "The file's own dialogue covers its parts in order."))
+    elif len(f.get("expected") or []) > 1:
+        methods.append(method("parts", "Parts", "warn", "not proven", parts_why))
+
+    llms = [sg.get("llm") for sg in segs if sg.get("llm")]
+    if llms:
+        best = max(llms, key=lambda x: float(x.get("confidence") or 0))
+        methods.append(method("ai", "AI", "ok",
+                              f"{best.get('code')} {float(best.get('confidence') or 0):.0%}",
+                              best.get("reason") or "AI annotation."))
+
+    releases = [sg for sg in segs if sg.get("evidence") == "release name"]
+    if releases:
+        methods.append(method("release", "Release name", "ok",
+                              releases[0].get("code") or "used",
+                              "The release name contributed to the match."))
+
+    if f.get("duration"):
+        runtime = next((float(e.get("runtime")) for e in series.get("episodes") or []
+                        if f"S{e.get('season', 0):02d}E{e.get('episode', 0):02d}"
+                        in (f.get("expected") or [])
+                        and e.get("runtime")), None)
+        detail = f"TVDB runtime {runtime:.0f} min" if runtime else "file metadata"
+        methods.append(method("duration", "Duration", "info",
+                              _clock(f.get("duration")), detail))
+    return methods
+
+
 def build_plan(series: dict, scan: dict) -> list[dict]:
     s = get_settings()
     root = Path(series["path"])
@@ -693,6 +807,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     # 1. Decide each file's episode list from its segments.
     decided: dict[str, list[tuple[dict, str, str, bool]]] = {}
     part_notes: dict[str, str] = {}
+    parts = False
+    why = ""
     for f in files:
         parts, why = _parts_check(f, eps)
         part_notes[f["rel"]] = why
@@ -771,7 +887,9 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 and (len(f.get("expected") or []) >= 2 or len(distinct_codes) >= 2) else "",
                 "summary_match": f.get("summary_match"),
                 "text_source": f.get("text_source"), "expected": f.get("expected") or [],
+                "duration": f.get("duration"),
                 "segments": segs, "selected": False,
+                "methods": _detection_methods(f, s, series, parts, why),
                 "evidence": f.get("evidence"),
                 "decided_by": decided_by, "decided_confidence": ai_conf,
                 "scope": "sample" if sample_only else (f.get("scope") or "full"),
