@@ -625,10 +625,10 @@ async function tabPlan(reload = true) {
       </details>
     </div>
     ${applied ? "" : coverageHtml(plan, state.series)}
-    ${shown.length ? `<table class="plan-table"><thead><tr>
+    ${shown.length ? `<div class="table-wrap"><table class="plan-table"><thead><tr>
       <th class="check">${applied ? "" : `<input type="checkbox" id="all-sel" title="Select all rows for Apply or Rescan">`}</th>
-      <th>File</th><th>Evidence</th><th style="width:150px"></th></tr></thead><tbody>
-      ${shown.map((it) => rowHtml(it, eps, applied)).join("")}</tbody></table>` :
+      <th>File</th><th>Evidence</th><th class="detect" title="Green = result, amber = inconclusive, red = could not run, neutral = not needed">Detection</th><th class="actions">Actions</th></tr></thead><tbody>
+      ${shown.map((it) => rowHtml(it, eps, applied)).join("")}</tbody></table></div>` :
       `<div class="empty">Nothing here.</div>`}`;
 
   $$(".filters .btn", tab).forEach((b) => b.onclick = () => { state.filter = b.dataset.f; tabPlan(false); });
@@ -1168,7 +1168,7 @@ function rowHtml(it, eps, applied) {
     `<div class="muted small">text: ${esc(it.text_source)}</div>` : "";
   const ovr = it.status === "MANUAL";
   const cur = (it.codes || it.suggested || []).join(" ");
-  return `<tr class="${it.selected ? "selected" : ""}">
+  return `<tr class="${it.selected ? "selected " : ""}kind-${esc(it.kind)}">
     <td class="check">${!applied ? `<input type="checkbox" class="sel" data-id="${it.id}" ${it.selected ? "checked" : ""} title="Select this row for Apply or Rescan">` : ""}</td>
     <td><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
       <span class="badge ${STATUS_BADGE[it.status] || ""}" title="${esc(it.note || "")}">${esc(it.status)}</span>
@@ -1184,12 +1184,12 @@ function rowHtml(it, eps, applied) {
         const folder = p.slice(0, Math.max(0, p.length - name.length)).replace(/\/$/, "");
         return `<div class="file-line">${i ? `<span class="plus">+</span> ` : ""}<span class="file-name">${esc(name)}</span>${folder ? `<span class="file-folder">${esc(folder)}</span>` : ""}</div>`;
       }).join("")}${targets}
-      ${methodsHtml(it.methods)}
       ${integrityNote(it)}
       ${it.kind === "split" && it.cuts ? `<div class="small" style="margin-top:2px"><span class="badge b-info">cut points chosen</span>
         ${it.cuts.map((c) => c == null ? "auto" : fmtCut(c)).join(", ")}</div>` : ""}
       <div class="muted small">${esc(it.reason || "")}</div></td>
     <td>${segs}${src}</td>
+    <td class="detect-cell">${methodsHtml(it.methods)}</td>
     <td class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
