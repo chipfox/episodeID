@@ -293,11 +293,11 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .plan-table col.check { width: 44px; }
 .plan-table col.file { width: 29%; }
 .plan-table col.evidence { width: 24%; }
-.plan-table col.detect { width: 20%; }
-.plan-table col.actions { width: calc(27% - 44px); }
+.plan-table col.detect { width: 27%; }
+.plan-table col.actions { width: calc(20% - 44px); }
 .plan-table th.check, .plan-table td.check { width: 44px; text-align: center; padding-left: 0; padding-right: 0; }
-.plan-table th.actions { text-align: center; padding-right: 0; }
-.plan-table td.row-actions { padding-left: 12px; padding-right: 0; }
+.plan-table th.actions { text-align: right; padding-right: 12px; }
+.plan-table td.row-actions { padding-left: 12px; padding-right: 12px; }
 .plan-table input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
 
 .plan-table .detect-cell { vertical-align: top; }
@@ -316,9 +316,8 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .path { font-size: 11.5px; }
 .arrow { font-size: 11.5px; }
 .arrow .path { overflow-wrap: anywhere; word-break: normal; }
-.row-actions { display: flex; flex-direction: column; align-items: stretch; gap: 4px; justify-content: flex-start; }
-
-.row-actions > .btn, .row-menu, .row-menu > summary { width: 100%; text-align: center; border-radius: 8px; background: var(--panel-2); }
+.row-actions { display: inline-flex; flex-direction: column; align-items: stretch; gap: 4px; justify-content: flex-start; width: max-content; max-width: 100%; margin-left: auto; }
+.row-actions > .btn, .row-actions > .row-menu, .row-menu > summary { width: auto; text-align: center; border-radius: 8px; background: var(--panel-2); }
 .plan-table tbody td { border-bottom: 1px solid var(--border); }
 .plan-table tbody tr:last-child td { border-bottom: 0; }
 
@@ -402,7 +401,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
   .plan-table td:nth-child(4)::before { content: "Detection"; }
   .plan-table td:nth-child(5)::before { content: "Actions"; }
   .plan-table .detect-cell .methods { max-width: none; margin: 0; }
-  .plan-table .row-actions { justify-content: flex-start; }
+  .plan-table .row-actions { justify-content: flex-start; width: max-content; max-width: 100%; margin-left: 0; }
   .plan-table tbody tr.kind-review { border-left: 3px solid var(--warn); }
   .plan-table tbody tr.kind-rename, .plan-table tbody tr.kind-split, .plan-table tbody tr.kind-join { border-left: 3px solid var(--info); }
   .plan-table tbody tr.selected { background: color-mix(in srgb, var(--accent) 6%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
