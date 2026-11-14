@@ -399,3 +399,5 @@ nav a.active { background: var(--panel-2); color: var(--text); }
   .plan-table th { position: static; }
   .file-folder { white-space: normal; overflow-wrap: anywhere; }
 }
+/* The plan table fits its container at both layouts; let its row menus escape. */
+.plan-wrap { overflow: visible !important; }

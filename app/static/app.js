@@ -625,7 +625,7 @@ async function tabPlan(reload = true) {
       </details>
     </div>
     ${applied ? "" : coverageHtml(plan, state.series)}
-    ${shown.length ? `<div class="table-wrap"><table class="plan-table"><thead><tr>
+    ${shown.length ? `<div class="table-wrap plan-wrap"><table class="plan-table"><thead><tr>
       <th class="check">${applied ? "" : `<input type="checkbox" id="all-sel" title="Select all rows for Apply or Rescan">`}</th>
       <th>File</th><th>Evidence</th><th class="detect" title="Green = result, amber = inconclusive, red = could not run, neutral = not needed">Detection</th><th class="actions">Actions</th></tr></thead><tbody>
       ${shown.map((it) => rowHtml(it, eps, applied)).join("")}</tbody></table></div>` :
