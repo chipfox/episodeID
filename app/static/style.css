@@ -297,9 +297,9 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .plan-table col.actions { width: calc(12% - 44px); }
 .plan-table th.check, .plan-table td.check { width: 44px; text-align: center; padding-left: 0; padding-right: 0; }
 @media (max-width: 1200px) {
-  .plan-table col.file { width: 36%; }
-  .plan-table col.evidence { width: 30%; }
-  .plan-table col.detect { width: 22%; }
+  .plan-table col.file { width: 33%; }
+  .plan-table col.evidence { width: 27%; }
+  .plan-table col.detect { width: 26%; }
   .plan-table col.actions { width: 117px; }
 }
 
