@@ -438,7 +438,7 @@ async function renderSeries(id) {
       </div>
     </div>
     <div class="series-stats">
-      <div class="stat"><span class="stat-label">Title cards</span><div>${titleCardBadge(s)}</div></div>
+      <div class="stat"><span class="stat-label">On-screen</span><div>${titleCardBadge(s)}</div></div>
       <div class="stat"><span class="stat-label">References</span><div><b>${s.reference_count}</b> <span class="muted">of ${s.episode_count} episodes</span></div></div>
       <div class="stat"><span class="stat-label">Last scan</span><div>${s.last_scan ? esc(when(s.last_scan.created)) : `<span class="muted">Not scanned yet</span>`}</div></div>
     </div>
