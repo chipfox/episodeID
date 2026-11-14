@@ -396,7 +396,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
   }
   .plan-table tbody, .plan-table tr, .plan-table td { width: auto; }
   .plan-table td { display: block; padding: 2px 0; border: 0; }
-  .plan-table td.check { position: absolute; top: 10px; right: 10px; width: auto; padding: 0; }
+  .plan-table td.check { position: absolute; top: 10px; right: 44px; width: auto; padding: 0; }
   .plan-table td:nth-child(2) { grid-column: 1; grid-row: 1; min-width: 0; }
   .plan-table td:nth-child(3) { grid-column: 1; grid-row: 2; padding-top: 8px; }
   .plan-table td:nth-child(4) { grid-column: 1; grid-row: 3; margin-top: 7px; padding-top: 7px; }
