@@ -223,9 +223,15 @@ def _render_node() -> str | None:
     return str(nodes[0]) if nodes else None
 
 
-def decode_method() -> str:
-    """'cuda', 'vaapi' or 'cpu' — what ffmpeg will use to decode video for title cards."""
+def decode_method(video: Path | None = None) -> str:
+    """'cuda', 'vaapi' or 'cpu' — what ffmpeg will use to decode video for title cards.
+
+    A codec-specific failure (AV1 profile 0 on this iGPU) is remembered for that
+    file only, so a later H.264/HEVC file can still use VAAPI in the same scan.
+    """
     if _accel.get("decode_failed"):
+        return "cpu"
+    if video is not None and str(video) in _accel.get("decode_failed_files", set()):
         return "cpu"
     want = get_settings()["titlecard_hwaccel"]
     have = _hwaccels()
@@ -601,6 +607,15 @@ class TitleIndex:
 
 # --------------------------------------------------------------- sampling
 
+_CODEC_NAMES = ("av1", "hevc", "h264", "mpeg2", "vp9", "vp8", "mpeg4", "vc1")
+
+
+def _codec_decode_error(why: str) -> bool:
+    """True when ffmpeg failed because this codec/profile has no hardware decoder."""
+    low = (why or "").lower()
+    return any(name in low for name in _CODEC_NAMES) or "profile" in low
+
+
 def _sample(video: Path, start: float, length: float, fps: float,
             mode: str = "full", method: str | None = None) -> list[tuple[float, "object"]]:
     """Frames at `fps` from [start, start+length].
@@ -609,7 +624,9 @@ def _sample(video: Path, start: float, length: float, fps: float,
     mode "full": decode everything except B-frames (same frames out, ~1/3 less work)."""
     import cv2
     skip = ["-skip_frame", "nokey"] if mode == "key" else ["-skip_frame", "bidir"]
-    method = method or decode_method()
+    method = method or decode_method(video)
+    if method != "cpu" and str(video) in _accel.get("decode_failed_files", set()):
+        method = "cpu"
     for attempt_method in ([method, "cpu"] if method != "cpu" else ["cpu"]):
         tmp = Path(tempfile.mkdtemp(prefix="tc_", dir=str(CACHE_DIR)))
         try:
@@ -625,7 +642,13 @@ def _sample(video: Path, start: float, length: float, fps: float,
                 err = [l for l in r.stderr.decode("utf-8", "replace").splitlines() if l.strip()]
                 why = next((l for l in err if re.search(r"(?i)cuda|vaapi|va_|device|hwaccel|driver", l)),
                            err[0] if err else "no frames produced")
-                _accel["decode_failed"] = f"{attempt_method}: {why.strip()[:200]}"
+                if _codec_decode_error(why):
+                    # This file's codec has no hardware decoder here (AV1 profile 0 on
+                    # Iris Xe). Remember only this file; another codec may still use VAAPI.
+                    _accel.setdefault("decode_failed_files", set()).add(str(video))
+                    _accel["decode_note"] = f"{attempt_method}: {why.strip()[:200]}"
+                else:
+                    _accel["decode_failed"] = f"{attempt_method}: {why.strip()[:200]}"
                 continue
             _accel["decode"] = attempt_method
             frames = []
