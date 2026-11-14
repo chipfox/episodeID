@@ -56,6 +56,12 @@ Changelog; release image tags identify their source commit.
   the file is neutral “not needed”; red is reserved for disabled or unavailable
   detectors.
 
+- **UI refresh for faster scanning and clearer status.** The six integration
+  chips are consolidated into an “All systems ready” popover, the series page
+  has a compact hero with title-card/reference/last-scan stats, plan tools are
+  grouped, rows are filename-first with a sticky table header and selected-row
+  highlight, and secondary row actions live behind a small More menu.
+
 ## [Unreleased] — 2026-11-11
 
 ### Added
