@@ -1173,6 +1173,24 @@ def _clear_card(c: dict) -> bool:
     return not c.get("partial") and bool(c.get("code")) and int(c.get("frames") or 1) >= 2
 
 
+def _card_fits_extra_episode(c: dict, expected: list[str], duration: float,
+                             runtimes: dict | None) -> bool:
+    """Can a card outside the filename's episode list start another episode?
+
+    A single-named file can legitimately hold two episodes, but on-screen text that
+    happens to match an episode title (a restaurant sign, a TV in the scene) is not a
+    title card. Only allow an extra code when the file is long enough to contain
+    another episode; otherwise keep the filename's single episode and ignore the
+    stray read. With no runtime data, preserve the old permissive behavior.
+    """
+    if not expected or c.get("code") in expected:
+        return True
+    if len(expected) != 1:
+        return False
+    rt = float((runtimes or {}).get(expected[0]) or 0)
+    return bool(rt and duration > 1.6 * rt * 60)
+
+
 def _apply_title_cards(f: dict, cards: list[dict], runtimes: dict | None = None,
                        trust: bool = False) -> list[str]:
     """Merge title-card evidence into a scanned file's segments. Returns log notes.
@@ -1187,14 +1205,25 @@ def _apply_title_cards(f: dict, cards: list[dict], runtimes: dict | None = None,
     expected = f.get("expected") or []
     dur = float(f.get("duration") or 0)
     if not segs:
-        # No usable dialogue: the title cards alone identify the episode(s).
+        # No usable dialogue: the title cards alone identify the episode(s). A card
+        # can be read more than once in one file (a repeated card, or the same card
+        # after a cold open); keep one read per episode so the planner does not see
+        # two non-consecutive segments and offer a split.
         usable = []
-        for i, c in enumerate(f["title_cards"]):
+        seen: dict[str, tuple[str, dict]] = {}
+        for c in f["title_cards"]:
             pos = _expected_at(expected, c["time"], dur)
             code = c["code"] if not c.get("partial") else \
                 _resolve_partial(c, None, [pos] if pos else expected)
-            if code:
-                usable.append((code, c))
+            if not code:
+                continue
+            if not _card_fits_extra_episode(c, expected, dur, runtimes):
+                continue
+            prev = seen.get(code)
+            if prev is None or (not c.get("partial"), c.get("score", 0)) > \
+                    (not prev[1].get("partial"), prev[1].get("score", 0)):
+                seen[code] = (code, c)
+        usable = sorted(seen.values(), key=lambda pair: float(pair[1].get("time") or 0))
         for i, (code, c) in enumerate(usable):
             if i == 0:
                 # Starts the file — unless the filename puts an earlier episode before it
@@ -1229,6 +1258,8 @@ def _apply_title_cards(f: dict, cards: list[dict], runtimes: dict | None = None,
                 if not code:
                     continue  # incomplete read that matches nothing else: no evidence
                 c = {**c, "code": code}
+            if not _card_fits_extra_episode(c, expected, dur, runtimes):
+                continue  # in-scene text, not a second episode in this file
             if sg is None:
                 # Typically an episode with no reference: the card starts a segment of its
                 # own, filling the unmatched stretch.

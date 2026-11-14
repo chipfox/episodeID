@@ -635,6 +635,30 @@ def _same_code_relation(a: dict, b: dict | None) -> str:
     return "split" if shared < 0.35 else "duplicate"
 
 
+def _one_per_code(chosen: list[tuple[dict, str, str, bool]]) -> list[tuple[dict, str, str, bool]]:
+    """One segment per episode code within a file.
+
+    A title card can be read more than once in one file (the card is repeated, or
+    the same episode's card is seen after a cold open). Those reads are evidence of
+    one episode, not two episodes: keeping both makes the planner see a
+    non-consecutive pair and offer a split. Keep the strongest read and preserve
+    the segments' time order.
+    """
+    rank = {"manual": 4, "parts": 4, "high": 3, "ai": 2, "low": 1, "provisional": 0}
+    best: dict[str, tuple[dict, str, str, bool]] = {}
+    for item in chosen:
+        seg, code, strength, _ai = item
+        if not code:
+            continue
+        key = (rank.get(strength, 0), float(seg.get("score") or 0),
+               -float(seg.get("start") or 0))
+        prev = best.get(code)
+        if prev is None or key > (rank.get(prev[2], 0), float(prev[0].get("score") or 0),
+                                  -float(prev[0].get("start") or 0)):
+            best[code] = item
+    return sorted(best.values(), key=lambda c: float(c[0].get("start") or 0))
+
+
 def build_plan(series: dict, scan: dict) -> list[dict]:
     s = get_settings()
     root = Path(series["path"])
@@ -681,7 +705,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 if parts and strength in ("low", "ai") and seg.get("code"):
                     code, strength, ai = seg["code"], "parts", False
                 chosen.append((seg, code, strength, ai))
-        decided[f["rel"]] = chosen
+        decided[f["rel"]] = _one_per_code(chosen)
 
     # 2. Claims: which (file, segment) owns each episode. Best evidence wins.
     rank = {"manual": 3, "high": 2, "parts": 2, "ai": 1, "provisional": 0, "low": 0}
@@ -738,10 +762,13 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 f"covers {', '.join(c[1] for c in chosen)} in order"
                 if "parts" in strengths else f.get("note", ""))
         why = part_notes.get(rel) or ""
-        if why and "parts" not in strengths and (len(f.get("expected") or []) >= 2 or len(segs) >= 2):
+        distinct_codes = {c[1] for c in chosen}
+        if why and "parts" not in strengths and (len(f.get("expected") or []) >= 2
+                                                 or len(distinct_codes) >= 2):
             note = (note.rstrip(" .") + ". " if note else "") + f"Multi-part check: {why}"
         base = {"source": rel, "status": f["status"], "note": note,
-                "parts_note": why if why and "parts" not in strengths else "",
+                "parts_note": why if why and "parts" not in strengths
+                and (len(f.get("expected") or []) >= 2 or len(distinct_codes) >= 2) else "",
                 "summary_match": f.get("summary_match"),
                 "text_source": f.get("text_source"), "expected": f.get("expected") or [],
                 "segments": segs, "selected": False,
