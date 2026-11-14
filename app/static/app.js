@@ -198,7 +198,7 @@ async function renderHome() {
   if (!list.length) {
     html += `<div class="empty">No series yet. Click <b>Add series</b> to pick a show folder.</div>`;
   } else {
-    html += `<div class="grid" style="margin-top:16px">` + list.map((s) => {
+    html += `<div class="grid series-grid" style="margin-top:16px">` + list.map((s) => {
       const pct = s.episode_count ? Math.round(100 * s.reference_count / s.episode_count) : 0;
       const counts = seriesCardCounts(s);
       return `<div class="card series-card" data-id="${s.id}">
