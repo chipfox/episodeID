@@ -3,6 +3,17 @@
 Tracks this fork's scan, matcher, and reference-quality changes. Format follows Keep a
 Changelog; release image tags identify their source commit.
 
+## [Unreleased] — 2026-11-14
+
+### Changed
+- **Plan spacing uses the available viewport.** The page now scales up to 1500 px,
+  and the plan columns rebalance so the checkbox stays 44 px, filename and evidence
+  receive the recovered width, detection rows remain compact, and Actions stays just
+  wide enough for its buttons. Tablet widths get a separate column allocation, while
+  mobile cards move the checkbox to the content's right edge, stretch detection values
+  across the card, place actions in a wrapping row, and keep the long series path from
+  widening the page.
+
 ## [Unreleased] — 2026-11-12
 
 ### Added
