@@ -297,7 +297,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .plan-table col.actions { width: calc(20% - 44px); }
 .plan-table th.check, .plan-table td.check { width: 44px; text-align: center; padding-left: 0; padding-right: 0; }
 .plan-table th.actions { text-align: right; padding-right: 12px; }
-.plan-table td.row-actions { padding-left: 12px; padding-right: 12px; }
+.plan-table td.actions { padding-left: 12px; padding-right: 12px; }
 .plan-table input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
 
 .plan-table .detect-cell { vertical-align: top; }

@@ -1195,7 +1195,7 @@ function rowHtml(it, eps, applied) {
       <div class="muted small">${esc(it.reason || "")}</div></td>
     <td>${segs}${src}</td>
     <td class="detect-cell">${methodsHtml(it.methods)}</td>
-    <td class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}
+    <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
@@ -1205,7 +1205,7 @@ function rowHtml(it, eps, applied) {
         ${it.kind === "review" && it.sample && !applied ? `<button class="btn small full-scan" data-src="${esc(it.source)}" title="Transcribe and match the whole file — settles it with every line, not just the sample windows">Full-file match</button>` : ""}
         ${it.kind === "split" && !applied ? `<button class="btn small cut-pick" data-iid="${it.id}" title="See where this file would be split, with pictures, and choose">Choose cut points…</button>` : ""}
       </div></details>
-    </td>
+    </div></td>
   </tr>`;
 }
 
