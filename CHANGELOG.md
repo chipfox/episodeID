@@ -62,7 +62,9 @@ Changelog; release image tags identify their source commit.
   grouped, rows are filename-first with a sticky table header and selected-row
   highlight, and secondary row actions live behind a small More menu. The plan
   table now uses Arr-style columns — File, Evidence, Detection, Actions — with
-  detector results in the right-hand Detection column.
+  detector results in the right-hand Detection column. Below 900px the plan
+  becomes labeled decision cards, and the reference/history tables scroll
+  inside their own wrappers instead of widening the page.
 
 ## [Unreleased] — 2026-11-11
 
