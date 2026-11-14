@@ -326,3 +326,30 @@ nav a.active { background: var(--panel-2); color: var(--text); }
   .plan-table th:nth-child(2), .plan-table th:nth-child(3) { width: auto; }
   .file-folder { white-space: normal; }
 }
+
+/* Detection evidence: a compact vertical list, one detector per line. */
+.methods {
+  display: grid; grid-template-columns: 1fr; gap: 2px;
+  margin: 7px 0 3px; max-width: 460px;
+}
+.method {
+  display: grid; grid-template-columns: 18px 78px minmax(0, 1fr);
+  align-items: baseline; gap: 4px; min-width: 0;
+  padding: 2px 7px; border-left: 2px solid transparent; border-radius: 5px;
+  background: color-mix(in srgb, var(--panel-2) 74%, transparent);
+  color: var(--text); font-size: 10.5px; font-weight: 500;
+}
+.method:hover { background: var(--panel-2); }
+.method .m-ico { font-size: 10px; font-weight: 800; text-align: center; }
+.method .m-label { color: var(--muted); font-weight: 650; }
+.method .m-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.method.ok .m-ico { color: var(--ok); }
+.method.warn .m-ico { color: var(--warn); }
+.method.fail .m-ico { color: var(--bad); }
+.method.info .m-ico { color: var(--info); }
+.method.skip .m-ico { color: var(--muted); }
+.method.fail { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 7%, var(--panel-2)); }
+.method.warn { border-left-color: color-mix(in srgb, var(--warn) 55%, transparent); }
+@media (max-width: 700px) {
+  .method { grid-template-columns: 17px 70px minmax(0, 1fr); }
+}

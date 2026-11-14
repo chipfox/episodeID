@@ -81,7 +81,6 @@ const KIND_BADGE = { rename: "b-info", split: "b-warn", join: "b-warn", aside: "
 const KIND_LABEL = { ok: "correct" };
 const DECIDED_LABEL = { AI: "AI", you: "you set it", parts: "parts verified", "split files": "split release", summary: "summary", "summary+title": "summary + title", "summary+ai": "summary + AI", "title card": "title card", "release name": "release name" };
 const ACTIONABLE = ["rename", "split", "join", "aside"];
-const METHOD_BADGE = { ok: "b-ok", warn: "b-warn", fail: "b-bad", skip: "", info: "b-info" };
 const METHOD_ICON = { ok: "✓", warn: "!", fail: "✕", skip: "–", info: "i" };
 
 // -------------------------------------------------------------------- theme
@@ -1150,10 +1149,13 @@ async function referenceDialog(code) {
 
 function methodsHtml(methods) {
   if (!methods || !methods.length) return "";
-  return `<div class="methods">${methods.map((m) => {
+  return `<div class="methods" aria-label="Detection methods">${methods.map((m) => {
     const icon = m.key === "duration" ? "⏱" : (METHOD_ICON[m.state] || "–");
-    const text = m.result ? ` ${esc(m.result)}` : "";
-    return `<span class="badge ${METHOD_BADGE[m.state] || ""} method" title="${esc(m.detail || m.result || "")}">${icon} <b>${esc(m.label)}</b>${text}</span>`;
+    return `<div class="method ${esc(m.state || "info")}" title="${esc([m.label, m.result, m.detail].filter(Boolean).join(" — "))}">
+      <span class="m-ico">${icon}</span>
+      <span class="m-label">${esc(m.label)}</span>
+      <span class="m-value">${esc(m.result || "—")}</span>
+    </div>`;
   }).join("")}</div>`;
 }
 
