@@ -354,7 +354,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 16
+PLAN_VERSION = 17
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -703,13 +703,17 @@ def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
     cards = f.get("title_cards") or []
     if cards:
         full = [c for c in cards if c.get("code")]
-        c = full[0] if full else cards[0]
-        codes = list(dict.fromkeys(x.get("code") for x in full if x.get("code")))
-        result = f"{', '.join(codes) or 'read'} @ {_clock(c.get('time') or 0)}"
-        if len(cards) > 1:
-            result += f" (+{len(cards) - 1})"
-        methods.append(method("title_card", "Title card", "ok", result,
-                              f"OCR read {len(cards)} title-card hit(s)."))
+        if full:
+            c = full[0]
+            codes = list(dict.fromkeys(x.get("code") for x in full if x.get("code")))
+            result = f"{', '.join(codes)} @ {_clock(c.get('time') or 0)}"
+            if len(cards) > 1:
+                result += f" (+{len(cards) - 1})"
+            methods.append(method("title_card", "Title card", "ok", result,
+                                  f"OCR read {len(cards)} title-card hit(s)."))
+        else:
+            methods.append(method("title_card", "Title card", "warn", "read, unmatched",
+                                  "OCR saw large text but it did not match a known episode title."))
     elif not s.get("titlecard_enabled"):
         methods.append(method("title_card", "Title card", "fail", "disabled",
                               "Title-card detection is disabled globally."))
@@ -729,7 +733,7 @@ def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
     if sm and sm.get("mode") != "off":
         code, score = sm.get("code"), float(sm.get("score") or 0)
         methods.append(method("summary", "Summary",
-                              "ok" if sm.get("passes") else "warn",
+                              "ok" if sm.get("auto") else "warn",
                               f"{code} {score:.0%}" if code else "ran, no result",
                               ("auto-accepted" if sm.get("auto") else "suggestion")
                               + (f"; margin {float(sm.get('margin') or 0):.2f}")))
