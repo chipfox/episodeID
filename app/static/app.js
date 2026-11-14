@@ -581,6 +581,7 @@ async function tabPlan(reload = true) {
     state.filter === "actions" ? ACTIONABLE.includes(it.kind) : it.kind === state.filter);
   const applied = plan.status !== "draft";
   const selCount = actionable.filter((it) => it.selected).length;
+  const rescanCount = plan.items.filter((it) => it.selected).length;
   const changedCount = plan.items.filter((it) => it.previous).length;
 
   tab.innerHTML = `<div class="row" style="margin-bottom:10px">
@@ -589,6 +590,7 @@ async function tabPlan(reload = true) {
       <div class="spacer"></div>
       ${(nDamaged || state.series.redownloads || state.series.missing_count) && state.sonarr ? `<button class="btn small" id="redl" title="Find replacements for damaged files, or missing episodes, in Sonarr — chosen by episode title">Re-download…</button>` : ""}
       <button class="btn small" id="check-files" title="Decode every file to find damaged ones (glitches, audio drifting out of sync, files cut short)">Check files…</button>
+      ${applied ? "" : `<button class="btn small" id="rescan-checked" ${rescanCount ? "" : "disabled"} title="Re-read and re-match every checked file">Rescan checked${rescanCount ? ` (${rescanCount})` : ""}</button>`}
       <button class="btn small" id="sonarr-cmp" title="Check EpisodeID's view of this series' files against Sonarr's">Compare with Sonarr</button>
       <button class="btn small" id="unmon" title="Seasons where every aired episode has a correct file: stop Sonarr searching for or upgrading them">Unmonitor complete seasons…</button>
       <span class="muted small" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} · ${esc(when(plan.created))}${changedCount ? ` · <b>${changedCount} changed</b>` : ""}${applied ? " · <b>applied</b>" : ""}</span>
@@ -596,7 +598,7 @@ async function tabPlan(reload = true) {
     </div>
     ${applied ? "" : coverageHtml(plan, state.series)}
     ${shown.length ? `<table><thead><tr>
-      <th class="check">${applied ? "" : `<input type="checkbox" id="all-sel" title="Select all">`}</th>
+      <th class="check">${applied ? "" : `<input type="checkbox" id="all-sel" title="Select all rows for Apply or Rescan">`}</th>
       <th>File → result</th><th>Detected in the file</th><th style="width:150px"></th></tr></thead><tbody>
       ${shown.map((it) => rowHtml(it, eps, applied)).join("")}</tbody></table>` :
       `<div class="empty">Nothing here.</div>`}`;
@@ -622,6 +624,17 @@ async function tabPlan(reload = true) {
   $$("button.set-ep", tab).forEach((b) => b.onclick = () => setEpisodeDialog(b.dataset.src, b.dataset.cur));
   $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code));
   $$("button.card-check", tab).forEach((b) => b.onclick = () => cardCheckDialog(b.dataset.src));
+  $$("button.rescan", tab).forEach((b) => b.onclick = () => {
+    startJob("scan", { only: [b.dataset.src], full: true });
+    toast("Re-reading the whole file — the plan updates when it finishes.");
+  });
+  const rsc = $("#rescan-checked", tab);
+  if (rsc) rsc.onclick = () => {
+    const sources = [...new Set(plan.items.filter((it) => it.selected).map((it) => it.source))];
+    if (!sources.length) return;
+    startJob("scan", { only: sources, full: true });
+    toast(`Re-reading ${sources.length} checked file${sources.length === 1 ? "" : "s"} — the plan updates when it finishes.`);
+  };
   $$(".int-accept", tab).forEach((b) => b.onclick = async (e) => {
     e.preventDefault();
     try {
@@ -1107,7 +1120,6 @@ async function referenceDialog(code) {
 }
 
 function rowHtml(it, eps, applied) {
-  const actionable = ACTIONABLE.includes(it.kind);
   const targets = (it.targets || []).map((t) =>
     `<div class="arrow">↳ <span class="path">${esc(t.path.replace(/^(\.\.\/)+/, ""))}</span>${t.duplicate ? ' <span class="badge b-bad">duplicate</span>' : ""}</div>`).join("");
   const segs = (it.segments || []).map((sg) => segHtml(sg, eps)).join("<br>") ||
@@ -1118,7 +1130,7 @@ function rowHtml(it, eps, applied) {
   const sm = it.summary_match;
   const cur = (it.codes || it.suggested || []).join(" ");
   return `<tr>
-    <td class="check">${actionable && !applied ? `<input type="checkbox" class="sel" data-id="${it.id}" ${it.selected ? "checked" : ""}>` : ""}</td>
+    <td class="check">${!applied ? `<input type="checkbox" class="sel" data-id="${it.id}" ${it.selected ? "checked" : ""} title="Select this row for Apply or Rescan">` : ""}</td>
     <td><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
       <span class="badge ${STATUS_BADGE[it.status] || ""}" title="${esc(it.note || "")}">${esc(it.status)}</span>
       ${it.decided_by && it.decided_by !== "dialogue" ? `<span class="badge ${it.decided_by === "AI" ? "b-ai" : "b-info"}" title="What settled this row${it.decided_confidence ? ` (${Math.round(it.decided_confidence * 100)}% confidence)` : ""}">${esc(DECIDED_LABEL[it.decided_by] || it.decided_by)}${it.decided_by === "AI" && it.decided_confidence ? ` ${Math.round(it.decided_confidence * 100)}%` : ""}</span>` : ""}
@@ -1137,6 +1149,7 @@ function rowHtml(it, eps, applied) {
     <td>${segs}${src}</td>
     <td>${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" style="margin-bottom:4px" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
       ${ovr ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">Clear</button>` : ""}`}
+      <button class="btn small rescan" data-src="${esc(it.source)}" style="margin-top:4px" title="Re-read this file and refresh its plan row">Rescan</button>
       <button class="btn small card-check" data-src="${esc(it.source)}" style="margin-top:4px" title="See what the title-card OCR reads in part of this file">Check title cards…</button>
       ${state.ai && !applied && it.kind !== "ok" && it.text_source && it.text_source !== "none" ? `<button class="btn small ai-check" data-src="${esc(it.source)}" style="margin-top:4px" title="Ask the AI which episode this file's dialogue is, from the TVDB summaries of the likely episodes">Ask AI</button>` : ""}
       ${it.kind === "review" && it.sample && !applied ? `<button class="btn small full-scan" data-src="${esc(it.source)}" style="margin-top:4px" title="Transcribe and match the whole file — settles it with every line, not just the sample windows">Full-file match</button>` : ""}
