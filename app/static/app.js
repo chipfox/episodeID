@@ -613,7 +613,8 @@ async function tabPlan(reload = true) {
       </div>
     </div>
     <div class="plan-tools">
-      ${applied ? "" : `<button class="btn small" id="rescan-checked" ${rescanCount ? "" : "disabled"} title="Re-read and re-match every checked file">Rescan checked${rescanCount ? ` (${rescanCount})` : ""}</button>`}
+      ${applied ? "" : `<button class="btn small" id="rescan-checked" ${rescanCount ? "" : "disabled"} title="Re-read and re-match every checked file">Rescan checked${rescanCount ? ` (${rescanCount})` : ""}</button>
+      <label class="mobile-select-all" title="Select every row currently shown"><input type="checkbox" id="all-visible"> Select all</label>`}
       <button class="btn small" id="check-files" title="Decode every file to find damaged ones (glitches, audio drifting out of sync, files cut short)">Check files…</button>
       ${(nDamaged || state.series.redownloads || state.series.missing_count) && state.sonarr ? `<button class="btn small" id="redl" title="Find replacements for damaged files, or missing episodes, in Sonarr — chosen by episode title">Re-download…</button>` : ""}
       <details class="tool-menu">
@@ -641,16 +642,18 @@ async function tabPlan(reload = true) {
       body: { selected: { [cb.dataset.id]: cb.checked } } }).catch(fail);
     tabPlan();
   });
-  const all = $("#all-sel", tab);
-  if (all) {
+  const syncAll = (el) => {
+    if (!el) return;
     const boxes = $$("input.sel", tab);
-    all.checked = boxes.length && boxes.every((b) => b.checked);
-    all.onchange = async () => {
-      const sel = Object.fromEntries(boxes.map((b) => [b.dataset.id, all.checked]));
+    el.checked = boxes.length && boxes.every((b) => b.checked);
+    el.onchange = async () => {
+      const sel = Object.fromEntries(boxes.map((b) => [b.dataset.id, el.checked]));
       await api(`/api/plans/${plan.id}/selection`, { method: "PATCH", body: { selected: sel } }).catch(fail);
       tabPlan();
     };
-  }
+  };
+  syncAll($("#all-sel", tab));
+  syncAll($("#all-visible", tab));
   $$("button.set-ep", tab).forEach((b) => b.onclick = () => setEpisodeDialog(b.dataset.src, b.dataset.cur));
   $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code));
   $$("button.card-check", tab).forEach((b) => b.onclick = () => cardCheckDialog(b.dataset.src));
