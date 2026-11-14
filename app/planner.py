@@ -354,7 +354,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 17
+PLAN_VERSION = 18
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -725,6 +725,9 @@ def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
         span = f"{_clock(windows[0][0])}–{_clock(windows[-1][1])}" if windows else "the file"
         methods.append(method("title_card", "Title card", "warn", "no card",
                               f"Scanned {span}; no title card matched an episode."))
+    elif f.get("status") == "OK":
+        methods.append(method("title_card", "Title card", "skip", "not needed",
+                              "The title-card pass only checks files the dialogue did not already settle."))
     else:
         methods.append(method("title_card", "Title card", "fail", "not run",
                               "No title-card pass ran for this file."))
