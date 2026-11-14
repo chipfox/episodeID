@@ -291,10 +291,10 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .plan-table td { padding: 10px; }
 
 .plan-table col.check { width: 44px; }
-.plan-table col.file { width: 31%; }
-.plan-table col.evidence { width: 26%; }
-.plan-table col.detect { width: 30%; }
-.plan-table col.actions { width: calc(13% - 44px); }
+.plan-table col.file { width: 38%; }
+.plan-table col.evidence { width: 27%; }
+.plan-table col.detect { width: 23%; }
+.plan-table col.actions { width: clamp(114px, calc(12% - 44px), 130px); }
 .plan-table th.check, .plan-table td.check { width: 44px; text-align: center; padding-left: 0; padding-right: 0; }
 .plan-table th.actions { text-align: right; padding-right: 8px; }
 .plan-table td.actions { padding-left: 6px; padding-right: 8px; vertical-align: middle; }
