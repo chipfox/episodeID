@@ -46,6 +46,16 @@ Changelog; release image tags identify their source commit.
   hardware decode failed for the whole process; a later H.264/HEVC file in the same
   scan can still use VAAPI. OCR remains on the OpenVINO GPU.
 
+- **Plan rows now show detector-by-detector results.** Each row carries a
+  `methods` list rendered as compact pills: Dialogue, Title card, Summary,
+  Parts, AI/release-name when present, and Duration metadata. Green means a
+  result, amber means the detector ran but was inconclusive, red means it could
+  not run, and neutral means metadata-only. The plan version was bumped so
+  existing draft plans rebuild from their saved scan without a rescan.
+  A title-card pass intentionally skipped because another detector already settled
+  the file is neutral “not needed”; red is reserved for disabled or unavailable
+  detectors.
+
 ## [Unreleased] — 2026-11-11
 
 ### Added
