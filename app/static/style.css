@@ -287,7 +287,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 
 .table-wrap { overflow-x: auto; overflow-y: visible; border-radius: 14px; }
 .plan-table { table-layout: fixed; min-width: 700px; border-radius: 14px; box-shadow: var(--shadow-soft); }
-.plan-table th { position: sticky; top: 60px; z-index: 2; background: var(--panel-2); box-shadow: 0 1px 0 var(--border); padding: 10px 12px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.plan-table th { position: static; top: auto; z-index: 2; background: var(--panel-2); box-shadow: 0 1px 0 var(--border); padding: 10px 12px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .plan-table td { padding: 12px; }
 .plan-table th:nth-child(2) { width: 31%; }
 .plan-table th:nth-child(3) { width: 25%; }
@@ -309,7 +309,8 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .path { font-size: 11.5px; }
 .arrow { font-size: 11.5px; }
 .arrow .path { overflow-wrap: anywhere; word-break: normal; }
-.row-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px; justify-content: flex-end; }
+.row-actions { display: flex; flex-direction: column; align-items: stretch; gap: 4px; justify-content: flex-start; }
+.row-actions > .btn, .row-menu, .row-menu > summary { width: 100%; text-align: center; }
 .row-menu { position: relative; }
 .row-menu > summary { list-style: none; cursor: pointer; }
 .row-menu > summary::-webkit-details-marker { display: none; }
