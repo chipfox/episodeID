@@ -41,6 +41,11 @@ Changelog; release image tags identify their source commit.
   API. Rows can be checked for rescan even when they are `ok` or `review`; Apply
   remains limited to actionable changes.
 
+- **AV1 title-card decode fallback is per-file.** AV1 profile 0 has no VAAPI decoder on
+  the Iris Xe, so ffmpeg falls back to CPU for that file. The fallback no longer marks
+  hardware decode failed for the whole process; a later H.264/HEVC file in the same
+  scan can still use VAAPI. OCR remains on the OpenVINO GPU.
+
 ## [Unreleased] — 2026-11-11
 
 ### Added
