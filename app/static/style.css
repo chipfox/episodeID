@@ -289,10 +289,17 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .plan-table { table-layout: fixed; min-width: 700px; border-radius: 14px; box-shadow: var(--shadow-soft); }
 .plan-table th { position: static; top: auto; z-index: 2; background: var(--panel-2); box-shadow: 0 1px 0 var(--border); padding: 10px 12px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .plan-table td { padding: 12px; }
-.plan-table th:nth-child(2) { width: 31%; }
-.plan-table th:nth-child(3) { width: 25%; }
-.plan-table th:nth-child(4) { width: 28%; }
-.plan-table th:nth-child(5) { width: 16%; }
+
+.plan-table col.check { width: 44px; }
+.plan-table col.file { width: 29%; }
+.plan-table col.evidence { width: 24%; }
+.plan-table col.detect { width: 20%; }
+.plan-table col.actions { width: calc(27% - 44px); }
+.plan-table th.check, .plan-table td.check { width: 44px; text-align: center; padding-left: 0; padding-right: 0; }
+.plan-table th.actions { text-align: center; padding-right: 0; }
+.plan-table td.row-actions { padding-left: 12px; padding-right: 0; }
+.plan-table input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
+
 .plan-table .detect-cell { vertical-align: top; }
 .plan-table .detect-cell .methods { margin: 0; max-width: none; }
 .plan-table tbody tr { transition: background .12s ease; }
@@ -310,7 +317,11 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .arrow { font-size: 11.5px; }
 .arrow .path { overflow-wrap: anywhere; word-break: normal; }
 .row-actions { display: flex; flex-direction: column; align-items: stretch; gap: 4px; justify-content: flex-start; }
-.row-actions > .btn, .row-menu, .row-menu > summary { width: 100%; text-align: center; }
+
+.row-actions > .btn, .row-menu, .row-menu > summary { width: 100%; text-align: center; border-radius: 8px; background: var(--panel-2); }
+.plan-table tbody td { border-bottom: 1px solid var(--border); }
+.plan-table tbody tr:last-child td { border-bottom: 0; }
+
 .row-menu { position: relative; }
 .row-menu > summary { list-style: none; cursor: pointer; }
 .row-menu > summary::-webkit-details-marker { display: none; }
@@ -372,7 +383,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
   .plan-table thead { display: none; }
   .plan-table tbody { display: grid; gap: 9px; }
   .plan-table tbody tr {
-    display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 9px;
+    display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 10px;
     padding: 12px; background: var(--panel); border: 1px solid var(--border);
     border-radius: 12px; box-shadow: var(--shadow-soft);
   }
