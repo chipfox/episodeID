@@ -59,12 +59,15 @@ Changelog; release image tags identify their source commit.
 - **UI refresh for faster scanning and clearer status.** The six integration
   chips are consolidated into an “All systems ready” popover, the series page
   has a compact hero with title-card/reference/last-scan stats, plan tools are
-  grouped, rows are filename-first with a sticky table header and selected-row
+  grouped, rows are filename-first with an aligned table header and selected-row
   highlight, and secondary row actions live behind a small More menu. The plan
-  table now uses Arr-style columns — File, Evidence, Detection, Actions — with
-  detector results in the right-hand Detection column. Below 900px the plan
-  becomes labeled decision cards, and the reference/history tables scroll
-  inside their own wrappers instead of widening the page.
+  table now uses Arr-style columns — selection checkbox, File, Evidence,
+  Detection, and Actions — with detector results in the right-hand Detection
+  column. The selection column has a fixed width so header and row checkboxes
+  cannot overlap the file column, and action buttons fill their column for
+  consistent row alignment. Below 900px the plan becomes full-width labeled
+  decision cards, exposes Select all in the toolbar, and the reference/history
+  tables scroll inside their own wrappers instead of widening the page.
 
 ## [Unreleased] — 2026-11-11
 
