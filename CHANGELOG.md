@@ -35,6 +35,12 @@ Changelog; release image tags identify their source commit.
   (`BURGER WORLD` in `S06E13`) is ignored unless the file is long enough to actually
   hold a second episode. Both rows now resolve to one episode with no split targets.
 
+- **Plan rows can be rescanned individually or in bulk.** Every row now has a
+  `Rescan` action that re-reads the whole file; the plan header has
+  `Rescan checked (N)`, which sends all checked sources to the existing scan job
+  API. Rows can be checked for rescan even when they are `ok` or `review`; Apply
+  remains limited to actionable changes.
+
 ## [Unreleased] — 2026-11-11
 
 ### Added
