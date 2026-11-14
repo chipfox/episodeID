@@ -29,6 +29,12 @@ Changelog; release image tags identify their source commit.
   as GPU results. AV1 title-card decode still falls back to CPU on this VAAPI stack;
   H.264/HEVC hardware decode remains codec/format dependent.
 
+- **Repeated title-card reads and in-scene text no longer create false splits.** A
+  title card read twice in one file (`S06E06` at 0:01 and 4:28) is collapsed to one
+  segment per episode, and a mid-file text read that matches another episode
+  (`BURGER WORLD` in `S06E13`) is ignored unless the file is long enough to actually
+  hold a second episode. Both rows now resolve to one episode with no split targets.
+
 ## [Unreleased] — 2026-11-11
 
 ### Added
