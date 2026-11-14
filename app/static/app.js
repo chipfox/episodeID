@@ -166,10 +166,20 @@ function versionChip(s) {
 async function refreshChips() {
   try {
     const s = await api("/api/status");
-    const chip = (on, label) => `<span class="chip ${on ? "on" : ""}">${on ? "●" : "○"} ${label}</span>`;
-    $("#chips").innerHTML = chip(s.tvdb, "TVDB") + chip(s.opensubtitles, "OpenSubtitles") +
-      chip(s.whisper, "Whisper") + chip(s.titlecards, "Title cards") + chip(s.llm, "AI") + chip(s.sonarr, "Sonarr") +
-      versionChip(s);
+    const items = [
+      [s.tvdb, "TVDB"], [s.opensubtitles, "OpenSubtitles"], [s.whisper, "Whisper"],
+      [s.titlecards, "Title cards"], [s.llm, "AI"], [s.sonarr, "Sonarr"],
+    ];
+    const missing = items.filter(([on]) => !on);
+    const label = missing.length ? `${missing.length} service${missing.length === 1 ? "" : "s"} need attention` : "All systems ready";
+    $("#chips").innerHTML = `<details class="system-status">
+      <summary title="${esc(label)}"><span class="status-dot ${missing.length ? "warn" : "ok"}"></span>${esc(label)}</summary>
+      <div class="system-pop">
+        <div class="pop-title">Services</div>
+        ${items.map(([on, name]) => `<div class="service-row"><span class="status-dot ${on ? "ok" : "bad"}"></span><span>${esc(name)}</span><span class="muted small">${on ? "ready" : "inactive"}</span></div>`).join("")}
+        <div class="pop-build">${versionChip(s)}</div>
+      </div>
+    </details>`;
     return s;
   } catch { return {}; }
 }
@@ -414,16 +424,25 @@ async function renderSeries(id) {
   refreshChips();
   const s = await api(`/api/series/${id}`);
   state.series = s;
-  view.innerHTML = `<div class="row">
-      <div><a href="#/" class="small">← All series</a>
-      <h1>${esc(s.name)} <span class="muted">${esc(s.year)}</span></h1>
-      <div class="path muted">${esc(s.path)} · TVDB ${s.tvdb_id}${s.imdb_id ? " · " + esc(s.imdb_id) : ""}</div></div>
-      <div class="spacer"></div>
-      <button class="btn" id="b-refs" title="Download reference subtitles/transcripts for episodes that don't have one yet">Fetch references</button>
-      <button class="btn primary" id="b-scan">Scan files</button>
+  view.innerHTML = `<section class="series-hero">
+    <a href="#/" class="back-link">← All series</a>
+    <div class="hero-main">
+      <div class="hero-copy">
+        <div class="eyebrow">Series</div>
+        <h1>${esc(s.name)} <span class="year">${esc(s.year)}</span></h1>
+        <div class="series-path" title="${esc(s.path)}">${esc(s.path)} <span class="dot">·</span> TVDB ${s.tvdb_id}${s.imdb_id ? ` <span class="dot">·</span> ${esc(s.imdb_id)}` : ""}</div>
+      </div>
+      <div class="hero-actions">
+        <button class="btn" id="b-refs" title="Download reference subtitles/transcripts for episodes that don't have one yet">Fetch references</button>
+        <button class="btn primary" id="b-scan">Scan files</button>
+      </div>
     </div>
-    <div class="small muted" style="margin-top:6px">${titleCardBadge(s)} · References: ${s.reference_count} / ${s.episode_count} episodes
-      ${s.last_scan ? ` · last scan ${esc(when(s.last_scan.created))}` : ""}</div>
+    <div class="series-stats">
+      <div class="stat"><span class="stat-label">Title cards</span><div>${titleCardBadge(s)}</div></div>
+      <div class="stat"><span class="stat-label">References</span><div><b>${s.reference_count}</b> <span class="muted">of ${s.episode_count} episodes</span></div></div>
+      <div class="stat"><span class="stat-label">Last scan</span><div>${s.last_scan ? esc(when(s.last_scan.created)) : `<span class="muted">Not scanned yet</span>`}</div></div>
+    </div>
+  </section>
     <div id="job"></div>
     <div class="tabs">
       <a data-tab="plan">Plan</a><a data-tab="episodes">Episodes &amp; references</a>
@@ -586,22 +605,30 @@ async function tabPlan(reload = true) {
   const rescanCount = plan.items.filter((it) => it.selected).length;
   const changedCount = plan.items.filter((it) => it.previous).length;
 
-  tab.innerHTML = `<div class="row" style="margin-bottom:10px">
+  tab.innerHTML = `<div class="plan-toolbar">
       <div class="filters">${filters.map(([k, l, n]) =>
-        `<button class="btn small ${state.filter === k ? "active" : ""}" data-f="${k}">${l} (${n})</button>`).join("")}</div>
-      <div class="spacer"></div>
-      ${(nDamaged || state.series.redownloads || state.series.missing_count) && state.sonarr ? `<button class="btn small" id="redl" title="Find replacements for damaged files, or missing episodes, in Sonarr — chosen by episode title">Re-download…</button>` : ""}
-      <button class="btn small" id="check-files" title="Decode every file to find damaged ones (glitches, audio drifting out of sync, files cut short)">Check files…</button>
+        `<button class="btn small ${state.filter === k ? "active" : ""}" data-f="${k}">${l} <span class="count">${n}</span></button>`).join("")}</div>
+      <div class="plan-toolbar-right">
+        <span class="plan-meta" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} <span class="dot">·</span> ${esc(when(plan.created))}${changedCount ? ` <span class="badge b-info">${changedCount} changed</span>` : ""}${applied ? ` <span class="badge b-ok">applied</span>` : ""}</span>
+        ${applied ? "" : `<button class="btn primary" id="apply" ${selCount ? "" : "disabled"}>Apply ${selCount} change${selCount === 1 ? "" : "s"}…</button>`}
+      </div>
+    </div>
+    <div class="plan-tools">
       ${applied ? "" : `<button class="btn small" id="rescan-checked" ${rescanCount ? "" : "disabled"} title="Re-read and re-match every checked file">Rescan checked${rescanCount ? ` (${rescanCount})` : ""}</button>`}
-      <button class="btn small" id="sonarr-cmp" title="Check EpisodeID's view of this series' files against Sonarr's">Compare with Sonarr</button>
-      <button class="btn small" id="unmon" title="Seasons where every aired episode has a correct file: stop Sonarr searching for or upgrading them">Unmonitor complete seasons…</button>
-      <span class="muted small" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} · ${esc(when(plan.created))}${changedCount ? ` · <b>${changedCount} changed</b>` : ""}${applied ? " · <b>applied</b>" : ""}</span>
-      ${applied ? "" : `<button class="btn primary" id="apply" ${selCount ? "" : "disabled"}>Apply ${selCount} change${selCount === 1 ? "" : "s"}…</button>`}
+      <button class="btn small" id="check-files" title="Decode every file to find damaged ones (glitches, audio drifting out of sync, files cut short)">Check files…</button>
+      ${(nDamaged || state.series.redownloads || state.series.missing_count) && state.sonarr ? `<button class="btn small" id="redl" title="Find replacements for damaged files, or missing episodes, in Sonarr — chosen by episode title">Re-download…</button>` : ""}
+      <details class="tool-menu">
+        <summary class="btn small">More tools</summary>
+        <div class="tool-menu-list">
+          <button class="btn small" id="sonarr-cmp" title="Check EpisodeID's view of this series' files against Sonarr's">Compare with Sonarr</button>
+          <button class="btn small" id="unmon" title="Seasons where every aired episode has a correct file: stop Sonarr searching for or upgrading them">Unmonitor complete seasons…</button>
+        </div>
+      </details>
     </div>
     ${applied ? "" : coverageHtml(plan, state.series)}
-    ${shown.length ? `<table><thead><tr>
+    ${shown.length ? `<table class="plan-table"><thead><tr>
       <th class="check">${applied ? "" : `<input type="checkbox" id="all-sel" title="Select all rows for Apply or Rescan">`}</th>
-      <th>File → result</th><th>Detected in the file</th><th style="width:150px"></th></tr></thead><tbody>
+      <th>File</th><th>Evidence</th><th style="width:150px"></th></tr></thead><tbody>
       ${shown.map((it) => rowHtml(it, eps, applied)).join("")}</tbody></table>` :
       `<div class="empty">Nothing here.</div>`}`;
 
@@ -1152,7 +1179,11 @@ function rowHtml(it, eps, applied) {
       ${it.elimination ? '<span class="badge b-info" title="Settled by what\'s around it: the other files and episodes of the season">by elimination</span>' : ""}
       ${((state.series.file_check || {}).imports || []).some((x) => (it.sources || [it.source]).includes(x.rel)) ? '<span class="badge b-bad" title="Sonarr imported this file recently and its content doesn\'t match its name">new download</span>' : ""}
       ${integrityBadge(it)}
-      ${(it.sources || [it.source]).map((p) => `<div class="path" style="margin-top:4px">${it.sources ? "+ " : ""}${esc(p)}</div>`).join("")}${targets}
+      ${(it.sources || [it.source]).map((p, i) => {
+        const name = p.split("/").pop();
+        const folder = p.slice(0, Math.max(0, p.length - name.length)).replace(/\/$/, "");
+        return `<div class="file-line">${i ? `<span class="plus">+</span> ` : ""}<span class="file-name">${esc(name)}</span>${folder ? `<span class="file-folder">${esc(folder)}</span>` : ""}</div>`;
+      }).join("")}${targets}
       ${methodsHtml(it.methods)}
       ${integrityNote(it)}
       ${it.kind === "split" && it.cuts ? `<div class="small" style="margin-top:2px"><span class="badge b-info">cut points chosen</span>
