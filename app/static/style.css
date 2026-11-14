@@ -300,7 +300,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
   .plan-table col.file { width: 36%; }
   .plan-table col.evidence { width: 30%; }
   .plan-table col.detect { width: 22%; }
-  .plan-table col.actions { width: calc(18% - 44px); }
+  .plan-table col.actions { width: 117px; }
 }
 
 .plan-table th.actions { text-align: right; padding-right: 8px; }
