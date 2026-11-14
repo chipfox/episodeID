@@ -285,7 +285,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .tool-menu-list .btn:hover { background: var(--panel-2); transform: none; }
 
 .table-wrap { overflow-x: auto; border-radius: 14px; }
-.plan-table { table-layout: fixed; min-width: 820px; border-radius: 14px; box-shadow: var(--shadow-soft); }
+.plan-table { table-layout: fixed; min-width: 760px; border-radius: 14px; box-shadow: var(--shadow-soft); }
 .plan-table th { position: sticky; top: 60px; z-index: 2; background: color-mix(in srgb, var(--panel-2) 90%, transparent); padding: 10px 12px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .plan-table td { padding: 12px; }
 .plan-table th:nth-child(2) { width: 31%; }
