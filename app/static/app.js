@@ -1165,14 +1165,12 @@ function rowHtml(it, eps, applied) {
   const src = it.text_source && it.text_source !== "none" ?
     `<div class="muted small">text: ${esc(it.text_source)}</div>` : "";
   const ovr = it.status === "MANUAL";
-  const sm = it.summary_match;
   const cur = (it.codes || it.suggested || []).join(" ");
-  return `<tr>
+  return `<tr class="${it.selected ? "selected" : ""}">
     <td class="check">${!applied ? `<input type="checkbox" class="sel" data-id="${it.id}" ${it.selected ? "checked" : ""} title="Select this row for Apply or Rescan">` : ""}</td>
     <td><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
       <span class="badge ${STATUS_BADGE[it.status] || ""}" title="${esc(it.note || "")}">${esc(it.status)}</span>
       ${it.decided_by && it.decided_by !== "dialogue" ? `<span class="badge ${it.decided_by === "AI" ? "b-ai" : "b-info"}" title="What settled this row${it.decided_confidence ? ` (${Math.round(it.decided_confidence * 100)}% confidence)` : ""}">${esc(DECIDED_LABEL[it.decided_by] || it.decided_by)}${it.decided_by === "AI" && it.decided_confidence ? ` ${Math.round(it.decided_confidence * 100)}%` : ""}</span>` : ""}
-      ${sm ? `<span class="badge ${sm.auto ? "b-ok" : "b-info"}" title="Episode summary ${sm.passes ? "passed the calibrated gate" : "is below the gate"}${sm.terms && sm.terms.length ? " · terms: " + esc(sm.terms.join(", ")) : ""}${sm.summary ? " · " + esc(sm.summary) : ""}">summary ${esc(sm.code)} ${Math.round((sm.score || 0) * 100)}%${sm.auto ? " · auto" : ""}</span>` : ""}
       ${it.previous ? `<span class="badge b-info" title="Changed by the last scan — was ${esc(it.previous.kind)} (${esc(it.previous.status)}), now ${esc(it.kind)} (${esc(it.status)})">changed</span>` : ""}
       ${it.sample ? `<span class="badge" title="Settled from a sample of the first 10 minutes — open Compare… → Read whole file to check every line">sample</span>` : ""}
       ${it.ref_warning ? '<span class="badge b-warn">check reference</span>' : ""}
@@ -1190,13 +1188,17 @@ function rowHtml(it, eps, applied) {
         ${it.cuts.map((c) => c == null ? "auto" : fmtCut(c)).join(", ")}</div>` : ""}
       <div class="muted small">${esc(it.reason || "")}</div></td>
     <td>${segs}${src}</td>
-    <td>${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" style="margin-bottom:4px" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
-      ${ovr ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">Clear</button>` : ""}`}
-      <button class="btn small rescan" data-src="${esc(it.source)}" style="margin-top:4px" title="Re-read this file and refresh its plan row">Rescan</button>
-      <button class="btn small card-check" data-src="${esc(it.source)}" style="margin-top:4px" title="See what the title-card OCR reads in part of this file">Check title cards…</button>
-      ${state.ai && !applied && it.kind !== "ok" && it.text_source && it.text_source !== "none" ? `<button class="btn small ai-check" data-src="${esc(it.source)}" style="margin-top:4px" title="Ask the AI which episode this file's dialogue is, from the TVDB summaries of the likely episodes">Ask AI</button>` : ""}
-      ${it.kind === "review" && it.sample && !applied ? `<button class="btn small full-scan" data-src="${esc(it.source)}" style="margin-top:4px" title="Transcribe and match the whole file — settles it with every line, not just the sample windows">Full-file match</button>` : ""}
-      ${it.kind === "split" && !applied ? `<button class="btn small cut-pick" data-iid="${it.id}" style="margin-top:4px" title="See where this file would be split, with pictures, and choose">Choose cut points…</button>` : ""}</td>
+    <td class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}
+      <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
+      <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
+        ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
+        ${ovr ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">Clear episode override</button>` : ""}`}
+        <button class="btn small card-check" data-src="${esc(it.source)}" title="See what the title-card OCR reads in part of this file">Check title cards…</button>
+        ${state.ai && !applied && it.kind !== "ok" && it.text_source && it.text_source !== "none" ? `<button class="btn small ai-check" data-src="${esc(it.source)}" title="Ask the AI which episode this file's dialogue is, from the TVDB summaries of the likely episodes">Ask AI</button>` : ""}
+        ${it.kind === "review" && it.sample && !applied ? `<button class="btn small full-scan" data-src="${esc(it.source)}" title="Transcribe and match the whole file — settles it with every line, not just the sample windows">Full-file match</button>` : ""}
+        ${it.kind === "split" && !applied ? `<button class="btn small cut-pick" data-iid="${it.id}" title="See where this file would be split, with pictures, and choose">Choose cut points…</button>` : ""}
+      </div></details>
+    </td>
   </tr>`;
 }
 

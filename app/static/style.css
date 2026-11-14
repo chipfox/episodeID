@@ -285,12 +285,13 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .tool-menu-list .btn:hover { background: var(--panel-2); transform: none; }
 
 .plan-table { table-layout: fixed; border-radius: 14px; box-shadow: var(--shadow-soft); }
-.plan-table th { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--panel-2) 90%, transparent); padding: 10px 12px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.plan-table th { position: sticky; top: 60px; z-index: 2; background: color-mix(in srgb, var(--panel-2) 90%, transparent); padding: 10px 12px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .plan-table td { padding: 12px; }
 .plan-table th:nth-child(2) { width: 40%; }
 .plan-table th:nth-child(3) { width: 38%; }
 .plan-table tbody tr { transition: background .12s ease; }
 .plan-table tbody tr:hover { background: color-mix(in srgb, var(--accent) 3.5%, transparent); }
+.plan-table tbody tr.selected { background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
 .plan-table td.check { padding-top: 15px; }
 .file-line { margin-top: 6px; min-width: 0; }
 .file-name { font-weight: 650; font-size: 12.5px; overflow-wrap: anywhere; }
@@ -298,6 +299,15 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .plus { color: var(--muted); font-weight: 700; }
 .path { font-size: 11.5px; }
 .arrow { font-size: 11.5px; }
+.arrow .path { overflow-wrap: anywhere; word-break: normal; }
+.row-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px; justify-content: flex-end; }
+.row-menu { position: relative; }
+.row-menu > summary { list-style: none; cursor: pointer; }
+.row-menu > summary::-webkit-details-marker { display: none; }
+.row-menu[open] > summary { background: var(--panel-2); }
+.row-menu-list { position: absolute; right: 0; top: calc(100% + 5px); z-index: 8; display: flex; flex-direction: column; gap: 3px; min-width: 175px; padding: 5px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.row-menu-list .btn { text-align: left; border-color: transparent; box-shadow: none; }
+.row-menu-list .btn:hover { background: var(--panel-2); transform: none; }
 .seg { margin: 1px 4px 1px 0; }
 .methods { margin: 6px 0 4px; gap: 3px; }
 .method { font-size: 10px; padding: 1px 6px; }
