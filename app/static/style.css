@@ -285,7 +285,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .tool-menu-list .btn { text-align: left; border-color: transparent; box-shadow: none; }
 .tool-menu-list .btn:hover { background: var(--panel-2); transform: none; }
 
-.table-wrap { overflow-x: auto; border-radius: 14px; }
+.table-wrap { overflow-x: auto; overflow-y: visible; border-radius: 14px; }
 .plan-table { table-layout: fixed; min-width: 700px; border-radius: 14px; box-shadow: var(--shadow-soft); }
 .plan-table th { position: sticky; top: 60px; z-index: 2; background: var(--panel-2); box-shadow: 0 1px 0 var(--border); padding: 10px 12px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .plan-table td { padding: 12px; }
@@ -366,7 +366,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 /* Arr-style responsive plan rows: below desktop width the five-column table
    becomes a readable decision card instead of five crushed columns. */
 @media (max-width: 900px) {
-  .table-wrap { overflow: visible; border-radius: 0; }
+  .table-wrap { overflow-x: auto; overflow-y: visible; }
   .plan-table { min-width: 0; table-layout: auto; background: transparent; border: 0; box-shadow: none; }
   .plan-table thead { display: none; }
   .plan-table tbody { display: grid; gap: 9px; }

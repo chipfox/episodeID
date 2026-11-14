@@ -1626,7 +1626,7 @@ function seasonCoverage(s) {
   }).join("");
   return `<details class="card" style="margin-bottom:12px" ${[...by.values()].some((r) => r.have < r.n) ? "open" : ""}>
     <summary><b>References by season</b></summary>
-    <table style="margin-top:8px"><thead><tr><th>Season</th><th></th><th>References</th><th></th></tr></thead><tbody>${rows}</tbody></table></details>`;
+    <div class="table-wrap"><table style="margin-top:8px"><thead><tr><th>Season</th><th></th><th>References</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
 }
 
 // An episode's match score from the last scan; clicking it opens the file's
@@ -1653,7 +1653,7 @@ async function tabEpisodes() {
       <div class="spacer"></div>
       <button class="btn small" id="retry">Retry not-found episodes</button>
       <button class="btn small" id="reload-eps">Reload TVDB episode list</button></div>
-    <table><thead><tr><th>Episode</th><th>Title</th><th>Match</th><th>Reference</th><th style="width:170px"></th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>Episode</th><th>Title</th><th>Match</th><th>Reference</th><th style="width:170px"></th></tr></thead><tbody>
     ${eps.map((e) => `<tr>
       <td class="mono">${esc(e.code)}</td>
       <td>${esc(e.title)}<div class="muted small">${esc(e.aired || "")}</div></td>
@@ -1664,7 +1664,7 @@ async function tabEpisodes() {
       <td>${e.ref ? `<button class="btn small view-ref" data-code="${esc(e.code)}" title="Read this episode's reference transcript">View</button>` : ""}<label class="btn small">Upload<input type="file" hidden data-code="${esc(e.code)}" accept=".srt,.ass,.ssa,.vtt,.txt"></label>
         <button class="btn small paste-ref" data-code="${esc(e.code)}" data-title="${esc(e.title || "")}">Paste</button>
         ${e.ref || e.miss ? `<button class="btn small refetch" data-code="${esc(e.code)}">Re-fetch</button>` : ""}</td>
-    </tr>`).join("")}</tbody></table>`;
+    </tr>`).join("")}</tbody></table></div>`;
   $("#retry", tab).onclick = () => startJob("fetch_refs", { retry_misses: true });
   $$("button.season-fetch", tab).forEach((b) => b.onclick = () => {
     startJob("fetch_refs", { season: +b.dataset.season });
@@ -1707,12 +1707,12 @@ async function tabHistory() {
   const tab = $("#tab");
   if (!list.length) { tab.innerHTML = `<div class="empty">No changes applied yet.</div>`; return; }
   const latestOpen = list.find((a) => !a.undone_at);
-  tab.innerHTML = `<table><thead><tr><th>#</th><th>When</th><th>Operations</th><th>Status</th><th></th></tr></thead><tbody>
+  tab.innerHTML = `<div class="table-wrap"><table><thead><tr><th>#</th><th>When</th><th>Operations</th><th>Status</th><th></th></tr></thead><tbody>
     ${list.map((a) => `<tr><td>${a.id}</td><td>${esc(when(a.created))}</td><td>${a.ops}</td>
       <td>${a.undone_at ? `<span class="badge">undone ${esc(when(a.undone_at))}</span>` : `<span class="badge b-ok">applied</span>`}</td>
       <td><button class="btn small view" data-id="${a.id}">View log</button>
         ${latestOpen && latestOpen.id === a.id ? `<button class="btn small danger undo" data-id="${a.id}">Undo</button>` : ""}</td></tr>`).join("")}
-    </tbody></table>
+    </tbody></table></div>
     <p class="muted small">Undo works newest-first. Files created by splits are parked in the backup folder's <span class="mono">undone</span> folder rather than deleted.</p>`;
   $$("button.view", tab).forEach((b) => b.onclick = async () => {
     const a = await api(`/api/applies/${b.dataset.id}`);
