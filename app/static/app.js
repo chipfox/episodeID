@@ -1175,7 +1175,7 @@ function rowHtml(it, eps, applied) {
   const cur = (it.codes || it.suggested || []).join(" ");
   return `<tr class="${it.selected ? "selected " : ""}kind-${esc(it.kind)}">
     <td class="check">${!applied ? `<input type="checkbox" class="sel" data-id="${it.id}" ${it.selected ? "checked" : ""} title="Select this row for Apply or Rescan">` : ""}</td>
-    <td><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
+    <td><div class="badge-row"><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
       <span class="badge ${STATUS_BADGE[it.status] || ""}" title="${esc(it.note || "")}">${esc(it.status)}</span>
       ${it.decided_by && it.decided_by !== "dialogue" ? `<span class="badge ${it.decided_by === "AI" ? "b-ai" : "b-info"}" title="What settled this row${it.decided_confidence ? ` (${Math.round(it.decided_confidence * 100)}% confidence)` : ""}">${esc(DECIDED_LABEL[it.decided_by] || it.decided_by)}${it.decided_by === "AI" && it.decided_confidence ? ` ${Math.round(it.decided_confidence * 100)}%` : ""}</span>` : ""}
       ${it.previous ? `<span class="badge b-info" title="Changed by the last scan — was ${esc(it.previous.kind)} (${esc(it.previous.status)}), now ${esc(it.kind)} (${esc(it.status)})">changed</span>` : ""}
@@ -1183,7 +1183,7 @@ function rowHtml(it, eps, applied) {
       ${it.ref_warning ? '<span class="badge b-warn">check reference</span>' : ""}
       ${it.elimination ? '<span class="badge b-info" title="Settled by what\'s around it: the other files and episodes of the season">by elimination</span>' : ""}
       ${((state.series.file_check || {}).imports || []).some((x) => (it.sources || [it.source]).includes(x.rel)) ? '<span class="badge b-bad" title="Sonarr imported this file recently and its content doesn\'t match its name">new download</span>' : ""}
-      ${integrityBadge(it)}
+      ${integrityBadge(it)}</div>
       ${(it.sources || [it.source]).map((p, i) => {
         const name = p.split("/").pop();
         const folder = p.slice(0, Math.max(0, p.length - name.length)).replace(/\/$/, "");
@@ -1195,7 +1195,7 @@ function rowHtml(it, eps, applied) {
       <div class="muted small">${esc(it.reason || "")}</div></td>
     <td>${segs}${src}</td>
     <td class="detect-cell">${methodsHtml(it.methods)}</td>
-    <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare…</button>` : ""}
+    <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
