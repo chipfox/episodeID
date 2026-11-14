@@ -64,8 +64,8 @@ Changelog; release image tags identify their source commit.
   table now uses Arr-style columns — selection checkbox, File, Evidence,
   Detection, and Actions — with detector results in the right-hand Detection
   column. The selection column has a fixed width so header and row checkboxes
-  cannot overlap the file column, and action buttons fill their column for
-  consistent row alignment. Below 900px the plan becomes full-width labeled
+  cannot overlap the file column, while actions remain a compact right-aligned
+  stack sized to their labels. Below 900px the plan becomes full-width labeled
   decision cards, exposes Select all in the toolbar, and the reference/history
   tables scroll inside their own wrappers instead of widening the page.
 
