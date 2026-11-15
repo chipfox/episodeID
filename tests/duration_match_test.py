@@ -50,6 +50,8 @@ assert not by[wrong_length["rel"]].get("selected", False), by[wrong_length["rel"
 for rel in (impossible["rel"], wrong_length["rel"]):
     method = next(m for m in by[rel]["methods"] if m["key"] == "duration")
     assert method["state"] == "fail", method
+    assert method["result"] == "25:00 vs 7:00 · 3.57×", method
+    assert "25:00 file is 3.57× the expected 7:00" in by[rel]["reason"], by[rel]["reason"]
 
 # Before there is a trustworthy cohort, the comparison is shown but cannot veto a plan.
 lonely = file_for("S01E10", "MISMATCH", 2400, [{

@@ -852,8 +852,7 @@ def _apply_duration_checks(items: list[dict], factors: dict, eps: dict) -> None:
             it["selected"] = False
         if it["kind"] in ("rename", "split", "join", "aside"):
             it["kind"] = "review"
-        _append_reason(it, f"Runtime does not qualify this match: {_duration_method(check)['result']} "
-                           f"({check['detail']}).")
+        _append_reason(it, f"Runtime does not qualify this match: {_duration_note(check)}.")
 
 
 def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
