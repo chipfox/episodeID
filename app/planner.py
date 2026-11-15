@@ -354,7 +354,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 18
+PLAN_VERSION = 19
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -677,6 +677,8 @@ def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
 
     methods: list[dict] = []
     opts = series.get("options") or {}
+    settings = get_settings()
+    min_score = float(settings.get("min_score") or 0.12)
     source = str(f.get("text_source") or "")
     ev = f.get("evidence") or {}
     top = ev.get("top1")
@@ -691,10 +693,12 @@ def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
                               f"{top} {score:.0%}" if top else "sidecar text",
                               "Sidecar subtitles are third-party text and are not trusted as proof."))
     elif top:
-        state = "warn" if ev.get("conflicted") else "ok"
+        state = "warn" if ev.get("conflicted") or score < min_score else "ok"
         detail = (f"{int(ev.get('windows') or 0)} windows, "
                   f"{int(ev.get('words') or 0)} words"
                   + (f"; conflicts with {ev.get('twin')}" if ev.get("twin") else ""))
+        if score < min_score:
+            detail = f"below the {min_score:.0%} dialogue threshold"
         methods.append(method("dialogue", "Dialogue", state, f"{top} {score:.0%}", detail))
     else:
         methods.append(method("dialogue", "Dialogue", "warn", "ran, no match",
