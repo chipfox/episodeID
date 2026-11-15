@@ -6,6 +6,10 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-14
 
 ### Changed
+- **Weak dialogue detections are no longer green.** A dialogue candidate below the
+  configured `min_score` now reports amber/inconclusive with its score and threshold in
+  the detail, even when another signal (such as a title card) settles the row. Plan
+  version 19 rebuilds existing draft plans so corrected states appear without a rescan.
 - **Evidence segments now have a real layout.** Each segment is a block with dedicated
   flex rows for its primary result and title-card/receipt details. Episode pills, title
   cards, times, titles, and references receive a consistent 6 px gap instead of relying
