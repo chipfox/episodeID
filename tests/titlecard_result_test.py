@@ -4,12 +4,16 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from app.pipeline import _titlecard_scope_all, _titlecard_skip_reason
+from app.pipeline import (_titlecard_effective_mode, _titlecard_scope_all,
+                          _titlecard_skip_reason)
 from app.titlecard import _diagnostic_hit, _inspection_result, cards_from_frames
 
 assert "disabled globally" in _titlecard_skip_reason(False, "on", True)
 assert "turned off" in _titlecard_skip_reason(True, "off", False)
 assert _titlecard_skip_reason(True, "off", True) == ""
+assert _titlecard_effective_mode("auto", False) == "auto"
+assert _titlecard_effective_mode("auto", True) == "on"
+assert _titlecard_effective_mode("off", True) == "on"
 assert _titlecard_scope_all({"title_cards_scope": "unconfirmed"}, False) is False
 assert _titlecard_scope_all({"title_cards_scope": "unconfirmed"}, True) is True
 assert _titlecard_scope_all({"title_cards_scope": "all"}, False) is True

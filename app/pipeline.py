@@ -1484,6 +1484,10 @@ def _title_card_swaps(files: list[dict], ctx) -> None:
         ctx.log(f"Title cards: {f['rel']} and {g['rel']} each show the other's title — swapped.")
 
 
+def _titlecard_effective_mode(mode: str, manual: bool) -> str:
+    return "on" if manual else mode
+
+
 def _titlecard_skip_reason(enabled: bool, mode: str, force: bool) -> str:
     if not enabled:
         return "Title cards: skipped — title cards are disabled globally."
@@ -1499,18 +1503,21 @@ def _titlecard_scope_all(options: dict, force: bool) -> bool:
 def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: bool = False) -> None:
     s = get_settings()
     opts = dict(series.get("options") or {})
-    mode = opts.get("title_cards", "auto")
+    configured_mode = opts.get("title_cards", "auto")
     # An explicit card re-read means "inspect the cards", so it overrides the series'
     # normal skip rules below. The global kill switch remains authoritative.
     manual = bool(reread)
+    mode = _titlecard_effective_mode(configured_mode, manual)
     if not files:
         return
-    skip_reason = _titlecard_skip_reason(bool(s["titlecard_enabled"]), mode, manual)
+    skip_reason = _titlecard_skip_reason(bool(s["titlecard_enabled"]), configured_mode, manual)
     if skip_reason:
         ctx.log(skip_reason)
         return
-    if mode == "off":
+    if configured_mode == "off":
         ctx.log("Title cards: manual re-read is overriding this series' off setting.")
+    if manual:
+        ctx.log("Title cards: manual re-read is bypassing the automatic title-card probe.")
     if not titlecard.available():
         ctx.log("Title cards: OCR engine not installed in this image — skipped.")
         return
@@ -1551,7 +1558,7 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
         # Re-read the videos instead of reusing cached OCR, and redo the auto test
         # and learned position, since both came from the old reads.
         force = time.time()
-        if mode == "auto":
+        if configured_mode == "auto":
             status = {}
         else:
             for k in ("window", "recurring"):
@@ -1651,7 +1658,7 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
             opts["title_cards_status"] = status
             db.update_series(series["id"], options=opts)
 
-    if mode == "auto" and "has_cards" not in status:
+    if configured_mode == "auto" and not manual and "has_cards" not in status:
         pool = [f for f in files if f["status"] == "OK"][:6]
         if len(pool) < 4:  # few confirmed files: top up with others so the test means something
             pool += [f for f in files if f["status"] not in ("OK", "ERROR")][:6 - len(pool)]
@@ -1685,7 +1692,7 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
             ctx.log(f"Title cards: found on {hits}/{len(pool)} probe files — not used for this "
                     "series. (Force them on under Series options.)")
             return
-    elif mode == "auto" and not status.get("has_cards"):
+    elif configured_mode == "auto" and not manual and not status.get("has_cards"):
         ctx.log("Title cards: skipped — the automatic probe found no cards for this series "
                 "(force them on under Series options).")
         return
