@@ -250,7 +250,7 @@ async function renderHome() {
   const [status, list] = await Promise.all([refreshChips(), api("/api/series")]);
   let html = `<div class="row"><div><h1>Series</h1>
     <div class="muted">Each series is a folder in your library matched to a TVDB show.</div></div>
-    <div class="spacer"></div><button class="btn" id="unmon-all" title="Every series: seasons where every aired episode has a correct file">Unmonitor complete seasons…</button>
+    <div class="spacer"></div><button class="btn" id="unmon-all" title="Every series: seasons where every aired episode has a correct file">Unmonitor seasons</button>
     <button class="btn primary" id="add">+ Add series</button></div>`;
   if (!status.tvdb) {
     html += `<div class="card" style="margin-top:16px">Start by adding your TVDB API key in
@@ -360,7 +360,7 @@ function seriesCardActions(s) {
   const review = (k && k.review) || 0;
   if (changes || review) {
     const target = changes ? "actions" : "review";
-    const label = changes ? `Review ${changes + review}` : `Review ${review}`;
+    const total = changes + review, label = `Review ${total} file${total === 1 ? "" : "s"}`;
     actions.push(`<a class="btn small ${review ? "" : "primary"}" href="#/series/${s.id}?filter=${target}"
       title="${changes} file${changes === 1 ? "" : "s"} can be changed and ${review} need${review === 1 ? "s" : ""} a person">${label}</a>`);
   }

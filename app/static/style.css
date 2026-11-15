@@ -66,8 +66,8 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex]:
 
 .series-card .name { font-weight: 600; font-size: 15px; }
 .series-card .name a { color: inherit; }
-.series-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start;
-  margin: 3px 0 5px; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.series-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center;
+  min-height: 73px; margin: 3px 0 5px; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .metric-heading { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px;
   color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
 .series-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 31px; }
