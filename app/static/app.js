@@ -7,7 +7,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const view = $("#view");
 let pollTimer = null;
-let state = { series: null, plan: null, tab: "plan", filter: "actions" };
+let state = { series: null, plan: null, tab: "plan", filter: "actions", planQuery: "" };
+const TAB_ROUTES = [
+  ["plan", "Plan"], ["episodes", "Episodes & references"],
+  ["history", "History"], ["options", "Series options"],
+];
+const FILTER_VALUES = new Set(["actions", "review", "ok", "all", "damaged"]);
 
 async function api(path, opts = {}) {
   const init = { method: opts.method || "GET", headers: {} };
@@ -130,17 +135,27 @@ $("#theme-btn").onclick = cycleTheme;
 
 async function route() {
   clearInterval(pollTimer);
-  const h = location.hash || "#/";
+  const raw = (location.hash || "#/").slice(1);
+  const [rawPath, rawQuery = ""] = raw.split("?");
+  const parts = rawPath.split("/").filter(Boolean);
+  const query = new URLSearchParams(rawQuery);
   $$("nav a").forEach((a) => a.classList.toggle("active",
-    (h.startsWith("#/settings") && a.dataset.nav === "settings") ||
-    ((h === "#/" || h.startsWith("#/series")) && a.dataset.nav === "series")));
+    (parts[0] === "settings" && a.dataset.nav === "settings") ||
+    ((parts.length === 0 || parts[0] === "series") && a.dataset.nav === "series")));
   try {
-    if (h.startsWith("#/settings")) await renderSettings();
-    else if (h.startsWith("#/series/")) {
-      if (h.split("/")[3] === "backup") state.tab = "options";
-      if (h.split("/")[3] === "damaged") { state.tab = "plan"; state.filter = "damaged"; }
-      await renderSeries(+h.split("/")[2]);
-      if (h.split("/")[3] === "backup") {
+    if (parts[0] === "settings") await renderSettings();
+    else if (parts[0] === "series") {
+      const id = +parts[1];
+      if (!state.series || state.series.id !== id) {
+        Object.assign(state, { series: null, plan: null, tab: "plan", filter: "actions", planQuery: "" });
+      }
+      if (parts[2] === "backup") state.tab = "options";
+      else if (parts[2] === "damaged") { state.tab = "plan"; state.filter = "damaged"; }
+      else if (TAB_ROUTES.some(([tab]) => tab === parts[2])) state.tab = parts[2];
+      const routeFilter = query.get("filter");
+      if (FILTER_VALUES.has(routeFilter)) state.filter = routeFilter;
+      await renderSeries(id);
+      if (parts[2] === "backup") {
         // after the tab has laid out (its backup table loads a moment later)
         setTimeout(() => { const fs = $("#bk"); if (fs) fs.closest("fieldset").scrollIntoView({ block: "start" }); }, 300);
       }
@@ -151,6 +166,37 @@ async function route() {
   }
 }
 window.addEventListener("hashchange", route);
+window.addEventListener("popstate", route);
+
+function seriesHash(tab, filter = null) {
+  const suffix = tab && tab !== "plan" ? `/${tab}` : "";
+  const qs = filter ? `?filter=${encodeURIComponent(filter)}` : "";
+  return `#/series/${state.series.id}${suffix}${qs}`;
+}
+
+function updateTabs() {
+  const selected = TAB_ROUTES.some(([tab]) => tab === state.tab) ? state.tab : "plan";
+  $$(".tabs [role=tab]").forEach((a) => {
+    const active = a.dataset.tab === selected;
+    a.classList.toggle("active", active);
+    a.setAttribute("aria-selected", String(active));
+    a.tabIndex = active ? 0 : -1;
+  });
+  const panel = $("#tab");
+  if (panel) {
+    panel.setAttribute("aria-labelledby", `tab-${selected}`);
+    panel.id = "tab";
+  }
+}
+
+function setTab(tab) {
+  if (!state.series || tab === state.tab) return;
+  state.tab = tab;
+  const hash = seriesHash(tab);
+  if (location.hash !== hash) history.pushState({ series: state.series.id, tab }, "", hash);
+  updateTabs();
+  showTab();
+}
 
 // "v0.1.0 · Nov 1 10:40 · abc1234": which build is running, so an update is easy to confirm.
 function versionChip(s) {
@@ -443,14 +489,30 @@ async function renderSeries(id) {
     </div>
   </section>
     <div id="job"></div>
-    <div class="tabs">
-      <a data-tab="plan">Plan</a><a data-tab="episodes">Episodes &amp; references</a>
-      <a data-tab="history">History</a><a data-tab="options">Series options</a>
+    <div class="tabs" role="tablist" aria-label="Series views">
+      ${TAB_ROUTES.map(([tab, label]) => `<a href="${seriesHash(tab)}" id="tab-${tab}" role="tab"
+        aria-controls="tab" data-tab="${tab}">${esc(label)}</a>`).join("")}
     </div>
-    <div id="tab"></div>`;
+    <div id="tab" role="tabpanel" tabindex="0"></div>`;
   $("#b-scan").onclick = () => startJob("scan");
   $("#b-refs").onclick = () => startJob("fetch_refs");
-  $$(".tabs a").forEach((a) => a.onclick = () => { state.tab = a.dataset.tab; showTab(); });
+  $$(".tabs [role=tab]").forEach((a) => a.onclick = (e) => {
+    e.preventDefault();
+    setTab(a.dataset.tab);
+  });
+  $(".tabs").onkeydown = (e) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const i = TAB_ROUTES.findIndex(([tab]) => tab === state.tab);
+    const next = e.key === "Home" ? 0
+      : e.key === "End" ? TAB_ROUTES.length - 1
+      : e.key === "ArrowRight" ? (i + 1) % TAB_ROUTES.length
+      : (i - 1 + TAB_ROUTES.length) % TAB_ROUTES.length;
+    const tab = TAB_ROUTES[next][0];
+    setTab(tab);
+    $(`#tab-${tab}`).focus();
+  };
+  updateTabs();
   showTab();
   watchJobs();
 }
@@ -537,7 +599,7 @@ function labelJob(kind) {
 }
 
 function showTab() {
-  $$(".tabs a").forEach((a) => a.classList.toggle("active", a.dataset.tab === state.tab));
+  updateTabs();
   ({ plan: tabPlan, episodes: tabEpisodes, history: tabHistory, options: tabOptions })[state.tab]()
     .catch(fail);
 }
