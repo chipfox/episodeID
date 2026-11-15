@@ -75,6 +75,21 @@ const parseCut = (v) => {
   return p.some(isNaN) ? NaN : p.reduce((a, x) => a * 60 + x, 0);
 };
 const when = (iso) => iso ? new Date(iso).toLocaleString() : "";
+function agoShort(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return "";
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (mins < 0) return "scheduled";
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
+  if (mins < 7 * 1440) return `${Math.round(mins / 1440)} days ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function timeTag(iso) {
+  if (!iso) return "";
+  return `<time datetime="${esc(iso)}" title="${esc(when(iso))}">${esc(agoShort(iso))}</time>`;
+}
 
 const STATUS_BADGE = {
   OK: "b-ok", OK_ORDER_DIFFERS: "b-warn", MISMATCH: "b-bad", LOW_CONFIDENCE: "b-warn",
@@ -248,24 +263,47 @@ async function renderHome() {
       const pct = s.episode_count ? Math.round(100 * s.reference_count / s.episode_count) : 0;
       const counts = seriesCardCounts(s);
       return `<div class="card series-card" data-id="${s.id}">
-        <div class="name">${esc(s.name)} <span class="muted">${esc(s.year)}</span></div>
+        <div class="name"><a href="#/series/${s.id}" class="series-open">${esc(s.name)}</a> <span class="muted">${esc(s.year)}</span></div>
         <div class="path muted">${esc(s.path)}</div>
-        <div class="small muted">References: ${s.reference_count} / ${s.episode_count} episodes</div>
-        <div class="small" style="margin:4px 0 2px">${titleCardBadge(s)}</div>
-        <div class="bar"><div style="width:${pct}%"></div></div>
+        <div class="metric-heading"><span>Reference coverage</span><span>${pct}%</span></div>
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"
+          aria-label="${esc(s.name)} reference coverage" title="${s.reference_count} of ${s.episode_count} episodes have a dialogue reference"><div style="width:${pct}%"></div></div>
+        <div class="small muted"><b>${s.reference_count}</b> of ${s.episode_count} episodes have a dialogue reference</div>
+        <div class="metric-heading">Detection evidence</div>
+        <div>${titleCardBadge(s)}</div>
+        <div class="metric-heading">File verification</div>
         <div class="counts">${counts}</div>
-        ${fileCheckLine(s.file_check)}${s.file_check && s.file_check.checked_at ? importLine(s.file_check) : ""}
+        ${fileCheckLine(s)}${s.file_check && s.file_check.checked_at ? importLine(s.file_check) : ""}
         ${backupLine(s)}${integrityLine(s)}
-        ${s.active_job ? `<div class="small"><span class="badge b-info">${esc(s.active_job.kind)} running…</span></div>` : ""}
+        ${seriesCardActions(s)}
       </div>`;
     }).join("") + `</div>`;
   }
   view.innerHTML = html;
   $("#add").onclick = () => addSeriesDialog();
   $("#unmon-all").onclick = () => unmonitorAllDialog();
-  $$(".series-card").forEach((c) => c.onclick = () => location.hash = `#/series/${c.dataset.id}`);
+  $$(".series-card").forEach((c) => c.onclick = (e) => {
+    if (e.target.closest("a, button")) return;
+    location.hash = `#/series/${c.dataset.id}`;
+  });
   $$(".bk-link").forEach((b) => b.onclick = (e) => { e.stopPropagation(); location.hash = `#/series/${b.dataset.id}/backup`; });
   $$(".int-link").forEach((b) => b.onclick = (e) => { e.stopPropagation(); location.hash = `#/series/${b.dataset.id}/damaged`; });
+  $$("button.scan-home").forEach((b) => b.onclick = (e) => { e.stopPropagation(); startHomeScan(+b.dataset.id, b); });
+}
+
+async function startHomeScan(id, button) {
+  button.disabled = true;
+  button.textContent = "Starting…";
+  try {
+    await api(`/api/series/${id}/jobs`, { method: "POST", body: { kind: "scan", params: {} } });
+    const row = button.closest(".series-actions");
+    if (row) row.innerHTML = `<span class="badge b-info">Scan queued — open the series for live progress</span>`;
+    setTimeout(() => { if (location.hash === "#/") renderHome().catch(fail); }, 2500);
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = "Scan files";
+    fail(e);
+  }
 }
 
 function ago(iso) {
@@ -298,14 +336,36 @@ function importLine(fc) {
     <span class="badge b-bad">⚑ ${bad.length} new download${bad.length === 1 ? "" : "s"} ${bad.length === 1 ? "doesn't" : "don't"} match ${bad.length === 1 ? "its name" : "their names"}</span></div>`;
 }
 
-function fileCheckLine(fc) {
+function fileCheckLine(s) {
+  const fc = s.file_check;
   if (!fc || !fc.checked_at) return importLine(fc);
+  if (s.active_job) return "";
   const p = fc.pending;
-  if (!p) return `<div class="small muted">Files checked ${ago(fc.checked_at)} · no changes since the last scan</div>`;
+  if (!p) return `<div class="small muted">Files checked ${timeTag(fc.checked_at)} · no changes since the last scan</div>`;
   const what = [p.added && `${p.added} new`, p.changed && `${p.changed} replaced`, p.removed && `${p.removed} removed`]
     .filter(Boolean).join(", ");
-  return `<div class="small" title="${esc((p.examples || []).join("\n"))}"><span class="badge b-info">⚑ ${what} since the last scan</span>
-    <span class="muted">— open the series and Scan files</span></div>`;
+  return `<div class="small" title="${esc((p.examples || []).join("\n"))}"><span class="badge b-info">⚑ ${what} since the last check</span></div>`;
+}
+
+function seriesCardActions(s) {
+  const actions = [];
+  if (s.active_job) {
+    return `<div class="series-actions"><span class="badge b-info" title="Open the series for live progress">⟳ ${esc(labelJob(s.active_job.kind))} running…</span>
+      <a class="btn small" href="#/series/${s.id}">Open job</a></div>`;
+  }
+  const k = s.plan && s.plan.kinds;
+  const changes = k ? ((k.rename || 0) + (k.split || 0) + (k.aside || 0)) : 0;
+  const review = (k && k.review) || 0;
+  if (changes || review) {
+    const target = changes ? "actions" : "review";
+    const label = changes ? `Review ${changes + review}` : `Review ${review}`;
+    actions.push(`<a class="btn small ${review ? "" : "primary"}" href="#/series/${s.id}?filter=${target}"
+      title="${changes} file${changes === 1 ? "" : "s"} can be changed and ${review} need${review === 1 ? "s" : ""} a person">${label}</a>`);
+  }
+  if (!s.last_scan || (s.file_check && s.file_check.pending)) {
+    actions.push(`<button class="btn small primary scan-home" data-id="${s.id}" title="Start a scan and follow it on the series page">Scan files</button>`);
+  }
+  return actions.length ? `<div class="series-actions">${actions.join("")}</div>` : "";
 }
 
 // Whether EpisodeID reads title cards for this show, and what its test found.
@@ -319,7 +379,9 @@ function titleCardBadge(s) {
   if (mode === "on") return `<span class="badge b-info" title="Turned on under Series options${esc(test ? " · " + test : "")}${esc(w)}">Title cards: on</span>`;
   if (!("has_cards" in st)) return `<span class="badge" title="Tested on the first scan">Title cards: not tested yet</span>`;
   return st.has_cards
-    ? `<span class="badge b-ok" title="${esc(test + w)}">✓ Title cards (${st.hits}/${st.probed})</span>`
+    ? (st.hits >= st.probed
+        ? `<span class="badge b-ok" title="${esc(test + w)}">✓ Title cards (${st.hits}/${st.probed})</span>`
+        : `<span class="badge b-warn" title="${esc(test + w)}">! Title cards (${st.hits}/${st.probed})</span>`)
     : `<span class="badge" title="${esc(test)} — not used for this show. Turn them on under Series options if it does show titles.">No title cards (${st.hits}/${st.probed})</span>`;
 }
 
@@ -335,18 +397,20 @@ function summaryCalStatus(o) {
 function seriesCardCounts(s) {
   if (!s.last_scan) return `<span class="muted small">Not scanned yet</span>`;
   const scanTip = "Last scan: " + Object.entries(s.last_scan.counts).map(([k, v]) => `${k} ${v}`).join(", ");
+  const statusIcons = { OK: "✓", OK_ORDER_DIFFERS: "↕", MISMATCH: "✕", LOW_CONFIDENCE: "?",
+    NO_TEXT: "–", NO_MATCH: "?", ERROR: "✕", MANUAL: "✎", PARTS: "⧉" };
   const k = (s.plan && s.plan.kinds) || null;
   if (!k) return Object.entries(s.last_scan.counts).map(([n, v]) =>
-    `<span class="badge ${STATUS_BADGE[n] || ""}">${esc(n)} ${v}</span>`).join("");
+    `<span class="badge ${STATUS_BADGE[n] || ""}" title="${esc(scanTip)}">${statusIcons[n] || "•"} ${esc(n)} ${v}</span>`).join("");
   const ok = k.ok || 0, review = k.review || 0;
   const changes = (k.rename || 0) + (k.split || 0) + (k.aside || 0);
   if (!changes && !review) {
     const scanned = s.file_check && s.file_check.pending ? " scanned" : "";
     return `<span class="badge b-ok" title="${esc(scanTip)}">✓ All ${ok}${scanned} file${ok === 1 ? "" : "s"} correct</span>`;
   }
-  return [ok ? `<span class="badge b-ok" title="${esc(scanTip)}">${ok} correct</span>` : "",
-    changes ? `<span class="badge b-warn">${changes} to change</span>` : "",
-    review ? `<span class="badge b-bad">${review} to review</span>` : ""].join("");
+  return [ok ? `<span class="badge b-ok" title="${esc(scanTip)}">✓ ${ok} correct</span>` : "",
+    changes ? `<span class="badge b-warn" title="${changes} EpisodeID can rename, split, join, or set aside; none of it applies without your approval">→ ${changes} to change</span>` : "",
+    review ? `<span class="badge b-bad" title="${review} file${review === 1 ? "" : "s"} need a person to compare evidence or set the episode">? ${review} to review</span>` : ""].join("");
 }
 
 async function addSeriesDialog() {
@@ -475,7 +539,8 @@ async function renderSeries(id) {
       <div class="hero-copy">
         <div class="eyebrow">Series</div>
         <h1>${esc(s.name)} <span class="year">${esc(s.year)}</span></h1>
-        <div class="series-path" title="${esc(s.path)}">${esc(s.path)} <span class="dot">·</span> TVDB ${s.tvdb_id}${s.imdb_id ? ` <span class="dot">·</span> ${esc(s.imdb_id)}` : ""}</div>
+        <div class="series-path" title="${esc(s.path)}">${esc(s.path)} <span class="dot">·</span>
+          TVDB ${s.tvdb_id}${s.imdb_id ? ` <span class="dot">·</span> <a href="https://www.imdb.com/title/${encodeURIComponent(s.imdb_id)}/" target="_blank" rel="noopener noreferrer" title="Open this series on IMDb (new tab)">${esc(s.imdb_id)}</a>` : ""}</div>
       </div>
       <div class="hero-actions">
         <button class="btn" id="b-refs" title="Download reference subtitles/transcripts for episodes that don't have one yet">Fetch references</button>
@@ -485,7 +550,7 @@ async function renderSeries(id) {
     <div class="series-stats">
       <div class="stat"><span class="stat-label">On-screen</span><div>${titleCardBadge(s)}</div></div>
       <div class="stat"><span class="stat-label">References</span><div><b>${s.reference_count}</b> <span class="muted">of ${s.episode_count} episodes</span></div></div>
-      <div class="stat"><span class="stat-label">Last scan</span><div>${s.last_scan ? esc(when(s.last_scan.created)) : `<span class="muted">Not scanned yet</span>`}</div></div>
+      <div class="stat"><span class="stat-label">Last scan</span><div>${s.last_scan ? timeTag(s.last_scan.created) : `<span class="muted">Not scanned yet</span>`}</div></div>
     </div>
   </section>
     <div id="job"></div>
@@ -662,8 +727,18 @@ async function tabPlan(reload = true) {
     ["ok", "Correct", counts.ok || 0], ["all", "All", plan.items.length]];
   if (nDamaged) filters.push(["damaged", "⚠ Damaged", nDamaged]);
   if (state.filter === "damaged" && !nDamaged) state.filter = "actions";
-  const shown = plan.items.filter((it) => state.filter === "all" ? true : state.filter === "damaged" ? damaged(it) :
-    state.filter === "actions" ? ACTIONABLE.includes(it.kind) : it.kind === state.filter);
+  const q = (state.planQuery || "").trim().toLowerCase();
+  const rowText = (it) => {
+    const epsByCode = eps;
+    const segCodes = (it.segments || []).flatMap((sg) => [sg.code, sg.dialogue_code, sg.title_card?.code, sg.llm?.code,
+      epsByCode[sg.code]?.title, sg.title_card?.text, sg.why].filter(Boolean));
+    return [it.source, ...(it.sources || []), ...(it.targets || []).map((t) => t.path), ...(it.codes || []),
+      ...(it.suggested || []), ...(it.expected || []), it.status, it.kind, it.reason, it.note,
+      ...segCodes].filter(Boolean).join(" ").toLowerCase();
+  };
+  const matchesQuery = (it) => !q || rowText(it).includes(q);
+  const shown = plan.items.filter((it) => (state.filter === "all" ? true : state.filter === "damaged" ? damaged(it) :
+    state.filter === "actions" ? ACTIONABLE.includes(it.kind) : it.kind === state.filter) && matchesQuery(it));
   const applied = plan.status !== "draft";
   const selCount = actionable.filter((it) => it.selected).length;
   const rescanCount = plan.items.filter((it) => it.selected).length;
@@ -672,8 +747,14 @@ async function tabPlan(reload = true) {
   tab.innerHTML = `<div class="plan-toolbar">
       <div class="filters">${filters.map(([k, l, n]) =>
         `<button class="btn small ${state.filter === k ? "active" : ""}" data-f="${k}">${l} <span class="count">${n}</span></button>`).join("")}</div>
+      <label class="plan-search" title="Search filenames, episode codes and titles, evidence, and plan reasons">
+        <span aria-hidden="true">⌕</span>
+        <input id="plan-search" type="search" placeholder="Filter ${plan.items.length} files"
+          value="${esc(state.planQuery || "")}" aria-label="Filter plan rows">
+        ${state.planQuery ? `<button type="button" id="plan-search-clear" aria-label="Clear filter">×</button>` : ""}
+      </label>
       <div class="plan-toolbar-right">
-        <span class="plan-meta" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} <span class="dot">·</span> ${esc(when(plan.created))}${changedCount ? ` <span class="badge b-info">${changedCount} changed</span>` : ""}${applied ? ` <span class="badge b-ok">applied</span>` : ""}</span>
+        <span class="plan-meta" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} <span class="dot">·</span> ${timeTag(plan.created)}${changedCount ? ` <span class="badge b-info" title="${changedCount} rows whose verdict differs from the plan before this scan">${changedCount} verdicts changed</span>` : ""}${applied ? ` <span class="badge b-ok">applied</span>` : ""}</span>
         ${applied ? "" : `<button class="btn primary" id="apply" ${selCount ? "" : "disabled"}>Apply ${selCount} change${selCount === 1 ? "" : "s"}…</button>`}
       </div>
     </div>
@@ -697,9 +778,26 @@ async function tabPlan(reload = true) {
       <th class="check">${applied ? "" : `<input type="checkbox" id="all-sel" title="Select all rows for Apply or Rescan" aria-label="Select all rows">`}</th>
       <th>File</th><th>Evidence</th><th class="detect" title="Green = result, amber = inconclusive, red = could not run, neutral = not needed">Detection</th><th class="actions">Actions</th></tr></thead><tbody>
       ${shown.map((it) => rowHtml(it, eps, applied)).join("")}</tbody></table></div>` :
-      `<div class="empty">Nothing here.</div>`}`;
+      `<div class="empty">No ${esc(state.filter === "all" ? "files" : filters.find(([k]) => k === state.filter)?.[1] || "rows")}${q ? ` match “${esc(state.planQuery)}”` : " here"}.<br><br>
+        ${q ? '<button class="btn small" id="clear-plan-search">Clear filter</button>' : ""}</div>`}
+`;
 
-  $$(".filters .btn", tab).forEach((b) => b.onclick = () => { state.filter = b.dataset.f; tabPlan(false); });
+  const runSearch = (value) => {
+    state.planQuery = value;
+    tabPlan(false);
+    const next = $("#plan-search", tab);
+    if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
+  };
+  const search = $("#plan-search", tab);
+  if (search) search.oninput = () => runSearch(search.value);
+  const clearSearch = $("#plan-search-clear", tab) || $("#clear-plan-search", tab);
+  if (clearSearch) clearSearch.onclick = () => runSearch("");
+  $$(".filters .btn", tab).forEach((b) => b.onclick = () => {
+    state.filter = b.dataset.f;
+    const hash = seriesHash("plan", state.filter);
+    history.replaceState({ series: state.series.id, tab: "plan", filter: state.filter }, "", hash);
+    tabPlan(false);
+  });
   const cov = $("#coverage", tab);
   if (cov) cov.ontoggle = () => { state.coverageOpen = cov.open; };
   $$("input.sel", tab).forEach((cb) => cb.onchange = async () => {
@@ -1689,14 +1787,14 @@ function seasonCoverage(s) {
     const pct = r.n ? Math.round(100 * r.have / r.n) : 0;
     const gap = r.n - r.have;
     const cls = !r.n ? "" : gap === 0 ? "b-ok" : pct >= 50 ? "b-warn" : "b-bad";
-    return `<tr><td>${sn === 0 ? "Specials" : `Season ${sn}`}</td>
-      <td style="width:40%"><div class="bar" title="${pct}%"><div style="width:${pct}%"></div></div></td>
+    return `<tr><td class="season-label">${sn === 0 ? "Specials" : `Season ${sn}`}</td>
+      <td style="width:35%"><div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${sn === 0 ? "Specials" : `Season ${sn}`} references" title="${pct}%"><div style="width:${pct}%"></div></div></td>
       <td>${r.n ? `<span class="badge ${cls}">${r.have} / ${r.n}</span>` : `<span class="muted small">nothing aired yet</span>`}${r.notFound ? ` <span class="muted small">${r.notFound} not found</span>` : ""}${r.unaired && r.n ? ` <span class="muted small">+${r.unaired} not aired</span>` : ""}</td>
       <td style="text-align:right">${gap ? `<button class="btn small season-fetch" data-season="${sn}" title="Fetch references for this season's ${gap} episode${gap === 1 ? "" : "s"} without one (tries not-found ones again)">Fetch missing (${gap})</button>` : ""}</td></tr>`;
   }).join("");
   return `<details class="card" style="margin-bottom:12px" ${[...by.values()].some((r) => r.have < r.n) ? "open" : ""}>
     <summary><b>References by season</b></summary>
-    <div class="table-wrap"><table style="margin-top:8px"><thead><tr><th>Season</th><th></th><th>References</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+    <div class="table-wrap"><table class="season-coverage" style="margin-top:8px"><thead><tr><th>Season</th><th>Coverage</th><th>References</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
 }
 
 // An episode's match score from the last scan; clicking it opens the file's
@@ -1723,7 +1821,7 @@ async function tabEpisodes() {
       <div class="spacer"></div>
       <button class="btn small" id="retry">Retry not-found episodes</button>
       <button class="btn small" id="reload-eps">Reload TVDB episode list</button></div>
-    <div class="table-wrap"><table><thead><tr><th>Episode</th><th>Title</th><th>Match</th><th>Reference</th><th style="width:170px"></th></tr></thead><tbody>
+    <div class="table-wrap"><table><thead><tr><th>Episode</th><th>Title</th><th>Match</th><th>Reference</th><th class="ep-actions">Reference tools</th></tr></thead><tbody>
     ${eps.map((e) => `<tr>
       <td class="mono">${esc(e.code)}</td>
       <td>${esc(e.title)}<div class="muted small">${esc(e.aired || "")}</div></td>
@@ -1731,7 +1829,7 @@ async function tabEpisodes() {
       <td>${e.ref ? `<span class="badge b-ok">${esc(e.ref.split(":")[0])}</span> <span class="muted small">${esc(e.ref_note)}</span>` :
         e.miss ? `<span class="badge b-warn">not found</span> <span class="muted small">${esc(e.miss)}</span>` :
         `<span class="muted small">—</span>`}</td>
-      <td>${e.ref ? `<button class="btn small view-ref" data-code="${esc(e.code)}" title="Read this episode's reference transcript">View</button>` : ""}<label class="btn small">Upload<input type="file" hidden data-code="${esc(e.code)}" accept=".srt,.ass,.ssa,.vtt,.txt"></label>
+      <td class="ep-actions">${e.ref ? `<button class="btn small view-ref" data-code="${esc(e.code)}" title="Read this episode's reference transcript">View</button>` : ""}<label class="btn small">Upload<input type="file" hidden data-code="${esc(e.code)}" accept=".srt,.ass,.ssa,.vtt,.txt"></label>
         <button class="btn small paste-ref" data-code="${esc(e.code)}" data-title="${esc(e.title || "")}">Paste</button>
         ${e.ref || e.miss ? `<button class="btn small refetch" data-code="${esc(e.code)}">Re-fetch</button>` : ""}</td>
     </tr>`).join("")}</tbody></table></div>`;
@@ -1777,9 +1875,10 @@ async function tabHistory() {
   const tab = $("#tab");
   if (!list.length) { tab.innerHTML = `<div class="empty">No changes applied yet.</div>`; return; }
   const latestOpen = list.find((a) => !a.undone_at);
-  tab.innerHTML = `<div class="table-wrap"><table><thead><tr><th>#</th><th>When</th><th>Operations</th><th>Status</th><th></th></tr></thead><tbody>
-    ${list.map((a) => `<tr><td>${a.id}</td><td>${esc(when(a.created))}</td><td>${a.ops}</td>
-      <td>${a.undone_at ? `<span class="badge">undone ${esc(when(a.undone_at))}</span>` : `<span class="badge b-ok">applied</span>`}</td>
+  const statusIcon = (undone) => undone ? "↩" : "✓";
+  tab.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Apply</th><th>When</th><th>Operations</th><th>Status</th><th></th></tr></thead><tbody>
+    ${list.map((a) => `<tr><td>#${a.id}</td><td>${timeTag(a.created)}</td><td>${a.ops} file operation${a.ops === 1 ? "" : "s"}</td>
+      <td><span class="badge ${a.undone_at ? "" : "b-ok"}" title="${a.undone_at ? `Undone ${esc(when(a.undone_at))}` : "Files were moved using this plan"}">${statusIcon(a.undone_at)} ${a.undone_at ? `undone ${esc(agoShort(a.undone_at))}` : "applied"}</span></td>
       <td><button class="btn small view" data-id="${a.id}">View log</button>
         ${latestOpen && latestOpen.id === a.id ? `<button class="btn small danger undo" data-id="${a.id}">Undo</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div>
@@ -1807,7 +1906,8 @@ async function tabOptions() {
   tab.innerHTML = `<form class="settings" id="opts"><fieldset><legend>Series</legend>
     ${field("name_in_files", "Series name in filenames", o.name_in_files || "", "Defaults to the folder name: " + s.path.split("/").pop())}
     ${field("imdb_id", "IMDb ID", s.imdb_id || "", "From TVDB. Used to look up subtitles on OpenSubtitles (e.g. tt1942683).")}
-    <div class="field"><label>Include specials (season 0)</label><input type="checkbox" name="include_specials" ${o.include_specials ? "checked" : ""}></div>
+    <div class="field"><label for="f-include_specials">Include specials (season 0)</label><input type="checkbox" id="f-include_specials" name="include_specials" ${o.include_specials ? "checked" : ""}>
+      <div class="hint">Search, scan and count season 0 episodes with the rest of the series.</div></div>
     </fieldset>
     <fieldset><legend>Title cards</legend>
     <div class="field"><label>Read on-screen titles</label>
@@ -1848,8 +1948,11 @@ async function tabOptions() {
         them. Nothing is ever deleted unless you do it here.</div>
       <div id="bk"><span class="muted small">Loading…</span></div>
     </fieldset>
-    <div class="row"><button class="btn danger" type="button" id="del">Remove series from EpisodeID</button>
-      <div class="spacer"></div><button class="btn primary" type="submit">Save</button></div></form>`;
+    <div class="row form-actions"><button class="btn danger" type="button" id="del">Remove series from EpisodeID</button>
+      <div class="spacer"></div><span class="small muted save-status">No unsaved changes</span>
+      <button class="btn primary" type="submit" id="opts-save">Save</button></div></form>`;
+  $("#f-name_in_files").placeholder = s.path.split("/").pop();
+  const resetOptsClean = watchDirty($("#opts"), $("#opts-save"));
   $("#opts").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -1864,13 +1967,14 @@ async function tabOptions() {
         title_cards: f.title_cards.value, title_cards_scope: f.title_cards_scope.value,
         title_cards_trust: f.title_cards_trust.checked, summary_match: f.summary_match.value } });
       toast("Saved");
+      resetOptsClean();
     } catch (err) { fail(err); }
   };
   $("#reread-cards").onclick = () => {
     if (!confirm("Scan again, reading every title card from the video files instead of the cache? This takes longer than a normal scan.")) return;
     startJob("scan", { reread_cards: true }); toast("Rescanning — see the job log.");
   };
-  $("recal-summary").onclick = async () => {
+  $("#recal-summary").onclick = async () => {
     try {
       const r = await api(`/api/series/${s.id}/summary/calibrate`, { method: "POST" });
       state.series = await api(`/api/series/${s.id}`);
@@ -1966,11 +2070,48 @@ function tcStatus(o) {
   return `Found on ${st.hits}/${st.probed} test files` + (st.window ? `, usually ${fmtTime(st.window[0])}–${fmtTime(st.window[1])} into an episode.` : ".");
 }
 
-function field(name, label, value, hint = "", type = "text", locked = false) {
-  return `<div class="field"><label for="f-${name}">${esc(label)}${locked ? ' <span class="locked">(set by env)</span>' : ""}</label>
-    <input type="${type}" id="f-${name}" name="${name}" value="${esc(value)}" ${locked ? "disabled" : ""} autocomplete="off">
+function field(name, label, value, hint = "", type = "text", locked = false, required = false) {
+  const id = `f-${name}`;
+  const labelHtml = `<label for="${id}">${esc(label)}${required ? ' <span class="required">Required</span>' : ""}${locked ? ' <span class="locked">(set by env)</span>' : ""}</label>`;
+  const input = `<input type="${type}" id="${id}" name="${name}" value="${esc(value)}" ${locked ? "disabled" : ""} ${required ? "required" : ""} autocomplete="off">`;
+  return `<div class="field">${labelHtml}
+    ${type === "password" ? `<div class="secret-row">${input}
+      <button class="btn small reveal" type="button" data-target="${id}" aria-label="Show value" aria-pressed="false">Show</button></div>` : input}
     ${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
 }
+
+function watchDirty(form, submitButton) {
+  if (!form || !submitButton) return () => {};
+  const status = form.querySelector(".save-status");
+  const clean = () => {
+    submitButton.disabled = true;
+    if (status) status.textContent = "No unsaved changes";
+    form._cleanValues = Array.from(form.querySelectorAll("input, select, textarea")).map((el) =>
+      `${el.name || el.id}:${el.type === "checkbox" ? el.checked : el.value}`).join("|");
+  };
+  const check = () => {
+    const dirty = form._cleanValues !== Array.from(form.querySelectorAll("input, select, textarea")).map((el) =>
+      `${el.name || el.id}:${el.type === "checkbox" ? el.checked : el.value}`).join("|");
+    submitButton.disabled = !dirty;
+    if (status) status.textContent = dirty ? "Unsaved changes" : "No unsaved changes";
+  };
+  form.addEventListener("input", check);
+  form.addEventListener("change", check);
+  clean();
+  return clean;
+}
+
+document.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-reveal]");
+  if (!button) return;
+  const input = document.getElementById(button.dataset.target);
+  if (!input) return;
+  const showing = input.type === "text";
+  input.type = showing ? "password" : "text";
+  button.textContent = showing ? "Show" : "Hide";
+  button.setAttribute("aria-label", showing ? `Show ${input.name || "value"}` : `Hide ${input.name || "value"}`);
+  button.setAttribute("aria-pressed", String(!showing));
+});
 
 // ----------------------------------------------------------------- settings
 
@@ -1978,11 +2119,11 @@ async function renderSettings() {
   refreshChips();
   const { settings: s, locked, languages = [] } = await api("/api/settings");
   const L = (k) => locked.includes(k);
-  const f = (k, label, hint = "", type = "text") => field(k, label, s[k], hint, type, L(k));
-  const cb = (k, label, hint = "") => `<div class="field"><label>${esc(label)}${L(k) ? ' <span class="locked">(set by env)</span>' : ""}</label>
-    <input type="checkbox" name="${k}" ${s[k] ? "checked" : ""} ${L(k) ? "disabled" : ""}>${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
-  const sel = (k, label, opts, hint = "") => `<div class="field"><label>${esc(label)}${L(k) ? ' <span class="locked">(set by env)</span>' : ""}</label>
-    <select name="${k}" ${L(k) ? "disabled" : ""}>${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(s[k]) === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
+  const f = (k, label, hint = "", type = "text", required = false) => field(k, label, s[k], hint, type, L(k), required);
+  const cb = (k, label, hint = "") => `<div class="field"><label for="f-${k}">${esc(label)}${L(k) ? ' <span class="locked">(set by env)</span>' : ""}</label>
+    <input type="checkbox" id="f-${k}" name="${k}" ${s[k] ? "checked" : ""} ${L(k) ? "disabled" : ""}>${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
+  const sel = (k, label, opts, hint = "") => `<div class="field"><label for="f-${k}">${esc(label)}${L(k) ? ' <span class="locked">(set by env)</span>' : ""}</label>
+    <select id="f-${k}" name="${k}" ${L(k) ? "disabled" : ""}>${opts.map(([v, t]) => `<option value="${esc(v)}" ${String(s[k]) === v ? "selected" : ""}>${esc(t)}</option>`).join("")}</select>
     ${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
   const test = (svc) => `<div class="row" style="justify-content:flex-end"><span class="small muted" id="t-${svc}"></span>
     <button class="btn small test" type="button" data-svc="${svc}">Test</button></div>`;
@@ -1994,7 +2135,7 @@ async function renderSettings() {
       languages.some(([v]) => v === s.language) ? languages : [...languages, [s.language, s.language]], "The language your episodes are spoken in. Audio is transcribed in this language, only subtitle tracks in it are read, and episode references are matched in it. Scenes in a second language are fine — the language that dominates the episode is what counts. Changing it re-transcribes files that were read in another language.")}
   </fieldset>
   <fieldset><legend>TVDB (required)</legend>
-    ${f("tvdb_api_key", "API key", 'From <a href="https://thetvdb.com/api-information" target="_blank">thetvdb.com</a>. Episode numbers follow TVDB aired order, like Sonarr.', "password")}
+    ${f("tvdb_api_key", "API key", 'From <a href="https://thetvdb.com/api-information" target="_blank" rel="noopener noreferrer">thetvdb.com</a>. Episode numbers follow TVDB aired order, like Sonarr.', "password", true)}
     ${f("tvdb_pin", "Subscriber PIN", "Only needed for user-supported keys.", "password")}
     ${test("tvdb")}</fieldset>
   <fieldset><legend>OpenSubtitles (reference subtitles)</legend>
@@ -2083,7 +2224,8 @@ async function renderSettings() {
     ${f("min_segment_seconds", "Shortest episode segment (s)", "Shorter runs are treated as noise (recaps, previews).", "number")}
     ${f("min_score", "Minimum score", "TF-IDF cosine similarity a confident match must reach.")}
     ${f("min_margin", "Minimum margin", "How far the best match must beat the runner-up.")}</fieldset>
-  <div class="row"><div class="spacer"></div><button class="btn primary" type="submit">Save settings</button></div>
+  <div class="row form-actions"><div class="spacer"></div><span class="small muted save-status">No unsaved changes</span>
+    <button class="btn primary" type="submit" id="settings-save">Save settings</button></div>
   </form>
   <form class="settings"><fieldset><legend>Cache</legend>
     <p class="muted small" style="margin-top:0">Dialogue, title-card OCR and preview pictures are kept so files aren't read twice.
@@ -2096,6 +2238,8 @@ async function renderSettings() {
   </fieldset></form>`;
 
   const form = $("#settings");
+  let savedLanguage = s.language;
+  const resetSettingsClean = watchDirty(form, $("#settings-save"));
   const collect = () => {
     const out = {};
     $$("input, select", form).forEach((el) => {
@@ -2106,7 +2250,14 @@ async function renderSettings() {
   };
   form.onsubmit = async (e) => {
     e.preventDefault();
-    try { await api("/api/settings", { method: "PUT", body: collect() }); toast("Settings saved"); refreshChips(); }
+    const nextLanguage = $("#f-language").value;
+    if (nextLanguage !== savedLanguage && !confirm(
+      `Changing the media language from ${savedLanguage} to ${nextLanguage} will re-transcribe files previously read in another language. Save anyway?`)) return;
+    try {
+      await api("/api/settings", { method: "PUT", body: collect() });
+      savedLanguage = nextLanguage;
+      toast("Settings saved"); refreshChips(); resetSettingsClean();
+    }
     catch (err) { fail(err); }
   };
   const showCache = (c) => {
@@ -2149,6 +2300,7 @@ async function renderSettings() {
     out.textContent = "Saving & testing…";
     try {
       await api("/api/settings", { method: "PUT", body: collect() });
+      resetSettingsClean();
       const r = await api(`/api/test/${b.dataset.svc}`, { method: "POST" });
       out.innerHTML = `<span class="badge ${r.ok ? "b-ok" : "b-bad"}">${r.ok ? "OK" : "Failed"}</span> ${esc(r.message)}`;
       refreshChips();
