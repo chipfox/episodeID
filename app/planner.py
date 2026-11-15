@@ -355,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 21
+PLAN_VERSION = 22
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -786,7 +786,6 @@ def _duration_evidence(item: dict, factors: dict, eps: dict) -> dict:
         "detail": (
             f"TVDB {target / 60.0:g} min"
             + (f" · this series runs {factor:.2f}× that" if calibrated else " · no duration baseline yet")
-            + f" · expected {_clock(expected)} · file is {ratio:.2f}× expected"
         ),
     }
 
@@ -821,8 +820,8 @@ def _duration_note(check: dict) -> str:
     duration = float(check.get("duration_seconds") or 0)
     expected = float(check.get("expected_seconds") or 0)
     ratio = float(check.get("ratio") or 1)
-    return (f"{_clock(duration)} file is {ratio:.2f}× the expected {_clock(expected)} "
-            f"({check.get('detail', '')})")
+    return (f"{_clock(duration)} file versus {_clock(expected)} expected "
+            f"({ratio:.2f}×; {check.get('detail', '')})")
 
 
 def _apply_duration_checks(items: list[dict], factors: dict, eps: dict) -> None:

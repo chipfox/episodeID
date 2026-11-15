@@ -15,7 +15,7 @@ Changelog; release image tags identify their source commit.
   calibrated, an impossible runtime converts an automatic match or proposed move into a
   review and unselects it, while merely unusual runtimes leave the action available but
   unchecked. Review notes state the mismatch directly instead of repeating the detector
-  tooltip. Plan version 21 rebuilds existing draft plans without a rescan.
+  tooltip. Plan version 22 rebuilds existing draft plans without a rescan.
 - **Weak dialogue detections are no longer green.** A dialogue candidate below the
   configured `min_score` now reports amber/inconclusive with its score and threshold in
   the detail, even when another signal (such as a title card) settles the row. Plan
