@@ -20,7 +20,10 @@ Changelog; release image tags identify their source commit.
   its frames and returns one prominent verdict: a matched episode, partial candidates,
   title-sized text with no known match, or no title card found; it also names the OCR
   backend used. Scan logs state whether title cards were skipped and summarize checked
-  files, matched cards, partial reads, and files with no card.
+  files, matched cards, partial reads, and files with no card. The explicit
+  “Rescan, re-reading title cards” action now checks every file included in that scan
+  pass, overriding the automatic probe, series off setting, dialogue-confirmed scope,
+  and summary-confirmed skips. The global title-card setting remains a hard kill switch.
 - **Weak dialogue detections are no longer green.** A dialogue candidate below the
   configured `min_score` now reports amber/inconclusive with its score and threshold in
   the detail, even when another signal (such as a title card) settles the row. Plan

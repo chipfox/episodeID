@@ -889,7 +889,8 @@ def job_scan(ctx, params):
     if scanned:
         _release_name_pass(series, scanned, ctx)
         cards = scanned
-        if (summary_index and s["titlecard_enabled"]
+        reread_cards = bool(params.get("reread_cards"))
+        if (summary_index and s["titlecard_enabled"] and not reread_cards
                 and (series.get("options") or {}).get("title_cards", "auto") != "off"):
             confirmed = [f for f in scanned
                          if (f.get("summary_match") or {}).get("auto")
@@ -899,7 +900,9 @@ def job_scan(ctx, params):
                 cards = [f for f in scanned if f["rel"] not in keep]
                 ctx.log(f"Title cards: skipped {len(keep)} file(s) already settled by a "
                         "calibrated summary match")
-        _titlecard_pass(series, cards, eps, ctx, reread=bool(params.get("reread_cards")))
+        elif reread_cards:
+            ctx.log("Title cards: manual re-read checks every scanned file, including summary-confirmed files.")
+        _titlecard_pass(series, cards, eps, ctx, reread=reread_cards)
         _title_card_swaps(scanned, ctx)
         for sw in reference_swaps(scanned, refs):
             ctx.log(f"References for {sw['codes'][0]} and {sw['codes'][1]} look swapped: title cards confirm each "
@@ -1481,18 +1484,33 @@ def _title_card_swaps(files: list[dict], ctx) -> None:
         ctx.log(f"Title cards: {f['rel']} and {g['rel']} each show the other's title — swapped.")
 
 
+def _titlecard_skip_reason(enabled: bool, mode: str, force: bool) -> str:
+    if not enabled:
+        return "Title cards: skipped — title cards are disabled globally."
+    if mode == "off" and not force:
+        return "Title cards: skipped — turned off for this series."
+    return ""
+
+
+def _titlecard_scope_all(options: dict, force: bool) -> bool:
+    return force or options.get("title_cards_scope") == "all"
+
+
 def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: bool = False) -> None:
     s = get_settings()
     opts = dict(series.get("options") or {})
     mode = opts.get("title_cards", "auto")
+    # An explicit card re-read means "inspect the cards", so it overrides the series'
+    # normal skip rules below. The global kill switch remains authoritative.
+    manual = bool(reread)
     if not files:
         return
-    if not s["titlecard_enabled"]:
-        ctx.log("Title cards: skipped — title cards are disabled globally.")
+    skip_reason = _titlecard_skip_reason(bool(s["titlecard_enabled"]), mode, manual)
+    if skip_reason:
+        ctx.log(skip_reason)
         return
     if mode == "off":
-        ctx.log("Title cards: skipped — turned off for this series.")
-        return
+        ctx.log("Title cards: manual re-read is overriding this series' off setting.")
     if not titlecard.available():
         ctx.log("Title cards: OCR engine not installed in this image — skipped.")
         return
@@ -1505,7 +1523,7 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
     root = Path(series["path"])
     status0 = dict(opts.get("title_cards_status") or {})
     rec0 = status0.get("recurring")
-    recurring: dict = dict(rec0) if isinstance(rec0, dict) and not reread else {}
+    recurring: dict = dict(rec0) if isinstance(rec0, dict) and not manual else {}
     index = titlecard.TitleIndex(series["episodes"], bool(opts.get("include_specials")), recurring,
                                  titlecard.series_names(series))
     runtimes = sorted(e["runtime"] for e in eps.values() if e.get("runtime") and e["season"] > 0)
@@ -1529,7 +1547,7 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
     if not isinstance(status.get("recurring", {}), dict):
         status.pop("recurring", None)  # earlier format (no position): found again below
     force = 0.0
-    if reread:
+    if manual:
         # Re-read the videos instead of reusing cached OCR, and redo the auto test
         # and learned position, since both came from the old reads.
         force = time.time()
@@ -1539,7 +1557,7 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
             for k in ("window", "recurring"):
                 status.pop(k, None)
         ctx.log("Title cards: re-reading from the video files (cached OCR ignored).")
-    scope_all = opts.get("title_cards_scope") == "all"
+    scope_all = _titlecard_scope_all(opts, manual)
     trust = opts.get("title_cards_trust", True) is not False
     done: set[str] = set()
     hit_times: list[float] = []
