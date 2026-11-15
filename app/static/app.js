@@ -1568,10 +1568,18 @@ function cardCheckDialog(source) {
         body: { source, start, end, decode: $("#cc-d", box).value, mode: $("#cc-m", box).value } });
       const hitTxt = (h) => !h ? "" : h.partial ? `partial → ${(h.candidates || []).slice(0, 4).join(", ")}` : `→ ${h.code} ${h.title}`;
       const lineTxt = (l) => `${l[0]} (conf ${l[1]}, height ${l[2]})`;
+      const result = r.result || {state: "warn", status: "No summary", headline: "The check completed but did not report a verdict.", detail: ""};
+      const resultState = ["ok", "warn", "fail", "info"].includes(result.state) ? result.state : "warn";
+      const resultIcon = METHOD_ICON[resultState] || METHOD_ICON.info;
       text = `EpisodeID title card check — ${source}\nrange ${fmtTime(start)}–${fmtTime(end)}, decode ${r.decode}, ${r.mode} frames, ${r.fps} fps` +
         ` (counts: conf ≥ ${r.min_conf}, line height ≥ ${r.min_line}, a title needs one line ≥ ${r.min_title_line})\n` +
+        `RESULT: ${result.status} — ${result.headline}\n${result.detail}\n` +
         r.frames.map((f) => `${fmtTime(f.t)}  ${f.size.join("x")}  ${f.lines.map(lineTxt).join(" | ") || "—"}  ${hitTxt(f.hit)}`).join("\n");
-      out.innerHTML = `<div class="small muted">Decoded on ${esc(r.decode.toUpperCase())}, ${r.frames.length} frames.</div>
+      out.innerHTML = `<div class="cc-result ${esc(resultState)}">
+          <div class="cc-result-main"><span class="cc-result-icon">${resultIcon}</span>
+            <span><b>${esc(result.status)}</b><div>${esc(result.headline)}</div></span></div>
+          <div class="small muted">${esc(result.detail)}</div></div>
+        <div class="small muted">Decoded on ${esc(r.decode.toUpperCase())}${r.ocr ? `, OCR on ${esc(r.ocr)}` : ""}; ${r.frames.length} ${esc(r.mode)} frames.</div>
         <div style="max-height:50vh;overflow:auto"><table><tr><th>Time</th><th>Text read (confidence, height)</th><th>Match</th></tr>
         ${r.frames.map((f) => `<tr><td class="mono">${fmtTime(f.t)}</td>
           <td class="small">${f.lines.map((l) => `${esc(l[0])} <span class="muted">(${l[1]}, ${l[2]})</span>`).join("<br>") || '<span class="muted">—</span>'}</td>

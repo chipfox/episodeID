@@ -850,10 +850,62 @@ def _scan_pass(video: Path, start: float, length: float, index: TitleIndex,
     return frames
 
 
+def _fmt_clock(seconds) -> str:
+    seconds = max(0, int(float(seconds or 0)))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _inspection_result(cards: list[dict], frames: list[dict]) -> dict:
+    """Turn raw manual-OCR frames into one scan-level verdict for the GUI."""
+    full = [c for c in cards if not c.get("partial") and c.get("code")]
+    partial = [c for c in cards if c.get("partial")]
+    full.sort(key=lambda c: float(c.get("time") or 0))
+    partial.sort(key=lambda c: float(c.get("time") or 0))
+
+    if full:
+        codes = list(dict.fromkeys(c["code"] for c in full))
+        if len(codes) == 1:
+            c = max(full, key=lambda card: (card.get("score") or 0, len(card.get("text") or "")))
+            headline = f"{c['code']} — {c.get('title') or 'matched title'}"
+            detail = f"Read “{c.get('text') or c.get('title')}” at {_fmt_clock(c.get('time'))}."
+        else:
+            headline = "Matched " + " + ".join(codes)
+            detail = "Title cards were read at " + ", ".join(
+                _fmt_clock(c.get("time")) for c in full) + "."
+        return {"state": "ok", "status": "Title card matched", "codes": codes,
+                "headline": headline, "detail": detail}
+
+    if partial:
+        candidates = sorted({code for card in partial for code in (card.get("candidates") or [])})
+        if len(candidates) == 1:
+            headline = candidates[0]
+        else:
+            headline = f"{len(candidates)} possible episodes" if candidates else "unread title"
+        detail = "Only part of the card was read: " + " · ".join(
+            f"“{card.get('text')}” at {_fmt_clock(card.get('time'))}" for card in partial[:3])
+        if candidates:
+            detail += f" Possible episodes: {', '.join(candidates[:8])}."
+        else:
+            detail += " The read did not retain enough characters to narrow it to one title."
+        return {"state": "warn", "status": "Partial title card", "codes": candidates,
+                "headline": headline, "detail": detail}
+
+    title_sized = any(conf >= MIN_CONF and height >= MIN_TITLE_FRAC
+                      and re.search(r"[^\W\d_]{2,}", str(text))
+                      for frame in frames for text, conf, height, *_ in frame.get("lines") or [])
+    if title_sized:
+        return {"state": "warn", "status": "No known episode matched", "codes": [],
+                "headline": "Title-sized text did not match a known episode",
+                "detail": "OCR read text large enough to be a title, but it was not recognized."}
+    return {"state": "info", "status": "No title card found", "codes": [],
+            "headline": "No title-sized text was found",
+            "detail": "The checked range did not contain text tall enough and readable enough to be an episode title."}
+
+
 def inspect(video: Path, start: float, length: float, index: TitleIndex,
             decode: str = "auto", mode: str = "full", fps: float | None = None) -> dict:
     """Diagnostics: OCR every sampled frame of a window (no cache, no skipping) and
-    show what each matched. decode: "auto" (as the scan does) or "cpu"."""
+    show the final result plus what each frame contributed."""
     fps = float(fps or get_settings()["titlecard_fps"])
     method = "cpu" if decode == "cpu" else decode_method()
     before = _accel.get("decode")
@@ -867,7 +919,10 @@ def inspect(video: Path, start: float, length: float, index: TitleIndex,
         hit = index.match_frame(lines, t)  # the range is taken as starting with the episode
         out.append({"t": t, "lines": lines, "size": [int(img.shape[1]), int(img.shape[0])],
                     "hit": hit and {k: hit.get(k) for k in ("code", "title", "text", "partial", "candidates")}})
-    return {"decode": used, "mode": mode, "fps": fps, "frames": out,
+    cards = cards_from_frames(out)
+    acceleration = acceleration_status()
+    return {"decode": used, "ocr": acceleration.get("ocr"), "mode": mode, "fps": fps,
+            "frames": out, "cards": cards, "result": _inspection_result(cards, out),
             "min_conf": MIN_CONF, "min_line": MIN_BOX_FRAC, "min_title_line": MIN_TITLE_FRAC}
 
 

@@ -1485,7 +1485,13 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
     s = get_settings()
     opts = dict(series.get("options") or {})
     mode = opts.get("title_cards", "auto")
-    if not s["titlecard_enabled"] or mode == "off" or not files:
+    if not files:
+        return
+    if not s["titlecard_enabled"]:
+        ctx.log("Title cards: skipped — title cards are disabled globally.")
+        return
+    if mode == "off":
+        ctx.log("Title cards: skipped — turned off for this series.")
         return
     if not titlecard.available():
         ctx.log("Title cards: OCR engine not installed in this image — skipped.")
@@ -1662,11 +1668,15 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
                     "series. (Force them on under Series options.)")
             return
     elif mode == "auto" and not status.get("has_cards"):
+        ctx.log("Title cards: skipped — the automatic probe found no cards for this series "
+                "(force them on under Series options).")
         return
 
     todo = [f for f in files if f["rel"] not in done and f["status"] != "ERROR"
             and (scope_all or f["status"] != "OK")]
     if not todo:
+        ctx.log(f"Title cards: no files needed a title-card pass ({len(files)} files already settled "
+                "or handled by the probe).")
         return
     ctx.log(f"Title cards: checking {len(todo)} files"
             + ("" if scope_all else " the dialogue match didn't already confirm") + ".")
@@ -1678,6 +1688,12 @@ def _titlecard_pass(series: dict, files: list[dict], eps: dict, ctx, reread: boo
         if use_vision:
             cards = _vision_check(root / f["rel"], f, cards, index, series["name"], ctx)
         report(f, cards, _apply_title_cards(f, cards, rt, trust))
+    matched = sum(1 for f in todo if any(not card.get("partial") and card.get("code")
+                                         for card in f.get("title_cards") or []))
+    partial = sum(1 for f in todo if f.get("title_cards") and not any(
+        not card.get("partial") and card.get("code") for card in f["title_cards"]))
+    ctx.log(f"Title cards: checked {len(todo)} files — {matched} matched an episode, "
+            f"{partial} produced partial reads, {len(todo) - matched - partial} found no card.")
     if titlecard._accel.get("ocr_gpu_error") and not titlecard._accel.get("gpu_error_logged"):
         titlecard._accel["gpu_error_logged"] = True
         ctx.log(f"Title cards: GPU OCR failed, using the CPU instead — {titlecard._accel['ocr_gpu_error']}")

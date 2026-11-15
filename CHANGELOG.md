@@ -16,6 +16,11 @@ Changelog; release image tags identify their source commit.
   review and unselects it, while merely unusual runtimes leave the action available but
   unchecked. Review notes state the mismatch directly instead of repeating the detector
   tooltip. Plan version 22 rebuilds existing draft plans without a rescan.
+- **Title-card scans always state their result.** A manual title-card check now groups
+  its frames and returns one prominent verdict: a matched episode, partial candidates,
+  title-sized text with no known match, or no title card found; it also names the OCR
+  backend used. Scan logs state whether title cards were skipped and summarize checked
+  files, matched cards, partial reads, and files with no card.
 - **Weak dialogue detections are no longer green.** A dialogue candidate below the
   configured `min_score` now reports amber/inconclusive with its score and threshold in
   the detail, even when another signal (such as a title card) settles the row. Plan

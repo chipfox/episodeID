@@ -173,6 +173,19 @@ form.settings legend { font-weight: 600; padding: 0 6px; }
 .theme-btn svg { width: 18px; height: 18px; }
 
 img.zoomable { cursor: zoom-in; }
+.cc-result { display: grid; gap: 4px; padding: 10px 12px; margin: 12px 0; border: 1px solid var(--border);
+  border-left: 3px solid var(--muted); border-radius: 8px; background: color-mix(in srgb, var(--panel-2) 70%, transparent); }
+.cc-result-main { display: flex; align-items: flex-start; gap: 8px; }
+.cc-result-icon { font-size: 16px; line-height: 1.25; font-weight: 800; }
+.cc-result.ok { border-left-color: var(--ok); }
+.cc-result.ok .cc-result-icon { color: var(--ok); }
+.cc-result.warn { border-left-color: var(--warn); }
+.cc-result.warn .cc-result-icon { color: var(--warn); }
+.cc-result.fail { border-left-color: var(--bad); }
+.cc-result.fail .cc-result-icon { color: var(--bad); }
+.cc-result.info { border-left-color: var(--info); }
+.cc-result.info .cc-result-icon { color: var(--info); }
+
 .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 40; display: flex;
   align-items: center; justify-content: center; padding: 16px; }
 .lb-box { width: min(1280px, 100%); }
