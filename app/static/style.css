@@ -86,7 +86,9 @@ tr:last-child td { border-bottom: 0; }
 td.check { width: 28px; }
 .path { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
 .arrow { color: var(--muted); margin: 2px 0; }
-.seg { display: inline-block; margin: 1px 4px 1px 0; }
+.seg { display: block; margin: 0 0 10px; }
+.seg-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.seg-note { margin-top: 3px; line-height: 1.35; }
 
 .job { margin-top: 14px; }
 .job pre { max-height: 260px; overflow: auto; background: var(--panel-2); border-radius: 6px; padding: 10px;
@@ -349,7 +351,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .row-menu-list { position: absolute; right: 0; top: calc(100% + 5px); z-index: 8; display: flex; flex-direction: column; gap: 3px; min-width: 175px; padding: 5px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
 .row-menu-list .btn { text-align: left; border-color: transparent; box-shadow: none; }
 .row-menu-list .btn:hover { background: var(--panel-2); transform: none; }
-.seg { margin: 1px 4px 1px 0; }
+.seg { margin: 0 0 10px; }
 .methods { margin: 6px 0 4px; gap: 3px; }
 .method { font-size: 10px; padding: 1px 6px; }
 .badge { border-radius: 999px; font-weight: 650; }

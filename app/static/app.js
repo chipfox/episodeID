@@ -547,30 +547,33 @@ function showTab() {
 function segHtml(sg, eps) {
   const conf = sg.override ? "manual" : sg.confidence;
   const cls = conf === "high" ? "b-ok" : conf === "manual" ? "b-info" : "b-warn";
-  let h = `<span class="seg"><span class="badge ${cls}" title="score ${sg.score} · margin ${sg.margin ?? ""}">${
-    esc(sg.code || "?")}</span> <span class="muted small">${fmtTime(sg.start)}–${fmtTime(sg.end)}</span>`;
+  let h = `<div class="seg"><div class="seg-line"><span class="badge ${cls}" title="score ${sg.score} · margin ${sg.margin ?? ""}">${
+    esc(sg.code || "?")}</span><span class="muted small">${fmtTime(sg.start)}–${fmtTime(sg.end)}</span>`;
   if (sg.code && eps[sg.code]) {
     const e = eps[sg.code];
     const shaky = (e.ref_note || "").includes("⚠");
-    h += ` <span class="small">${esc(e.title)}</span>` + (e.ref ?
-      ` <span class="small ${shaky ? "" : "muted"}" style="${shaky ? "color:var(--warn)" : ""}" title="${esc(e.ref_note || "")}">· ref: ${esc(e.ref.split(":")[0])}${shaky ? " ⚠" : ""}</span>` : "");
+    h += `<span class="small">${esc(e.title)}</span>` + (e.ref ?
+      `<span class="small ${shaky ? "" : "muted"}" style="${shaky ? "color:var(--warn)" : ""}" title="${esc(e.ref_note || "")}">· ref: ${esc(e.ref.split(":")[0])}${shaky ? " ⚠" : ""}</span>` : "");
   }
-  if (sg.why && sg.evidence !== "release name" && (sg.confidence !== "high" || sg.evidence === "title+filename"))
-    h += `<div class="small" style="color:var(--warn)">${esc(sg.why)}</div>`;
-  else if (sg.confidence !== "high" && sg.alternatives && sg.alternatives.length)
-    h += ` <span class="muted small">(or ${sg.alternatives.slice(0, 2).map((a) => esc(a.code)).join(", ")})</span>`;
+  const showWhy = Boolean(sg.why && sg.evidence !== "release name" && (sg.confidence !== "high" || sg.evidence === "title+filename"));
+  const altText = !showWhy && sg.confidence !== "high" && sg.alternatives?.length
+    ? `(or ${sg.alternatives.slice(0, 2).map((a) => esc(a.code)).join(", ")})` : "";
+  if (altText) h += `<span class="muted small">${altText}</span>`;
+  h += `</div>`;
+  if (showWhy)
+    h += `<div class="small seg-note" style="color:var(--warn)">${esc(sg.why)}</div>`;
   if (sg.title_card) {
     const tc = sg.title_card, conflict = sg.confidence === "conflict";
-    h += `<div class="small"><span class="badge ${conflict ? "b-warn" : "b-ok"}" title="OCR score ${tc.score}">title card</span>
+    h += `<div class="small seg-line"><span class="badge ${conflict ? "b-warn" : "b-ok"}" title="OCR score ${tc.score}">title card</span>
       <span class="muted">“${esc(tc.text)}” at ${fmtTime(tc.time)} → ${esc(tc.code)}${tc.partial ? " (partial read)" : ""}${
       sg.dialogue_code && !conflict ? ` (dialogue said ${esc(sg.dialogue_code)})` : ""}</span></div>`;
   }
   if (sg.evidence === "release name")
-    h += `<div class="small"><span class="badge ${sg.confidence === "high" ? "b-ok" : "b-warn"}">release name</span>
+    h += `<div class="small seg-line"><span class="badge ${sg.confidence === "high" ? "b-ok" : "b-warn"}">release name</span>
       <span class="muted">${esc(sg.why || "")}</span></div>`;
-  if (sg.llm) h += `<div class="small"><span class="badge b-ai">AI → ${esc(sg.llm.code)} ${Math.round(sg.llm.confidence * 100)}%</span>
+  if (sg.llm) h += `<div class="small seg-line"><span class="badge b-ai">AI → ${esc(sg.llm.code)} ${Math.round(sg.llm.confidence * 100)}%</span>
     <span class="muted">${esc(sg.llm.reason)}</span></div>`;
-  return h + `</span>`;
+  return h + `</div>`;
 }
 
 async function tabPlan(reload = true) {
@@ -1167,7 +1170,7 @@ function methodsHtml(methods) {
 function rowHtml(it, eps, applied) {
   const targets = (it.targets || []).map((t) =>
     `<div class="arrow">↳ <span class="path">${esc(t.path.replace(/^(\.\.\/)+/, ""))}</span>${t.duplicate ? ' <span class="badge b-bad">duplicate</span>' : ""}</div>`).join("");
-  const segs = (it.segments || []).map((sg) => segHtml(sg, eps)).join("<br>") ||
+  const segs = (it.segments || []).map((sg) => segHtml(sg, eps)).join("") ||
     `<span class="muted small">${esc(it.text_source === "none" ? "no subtitles / transcript" : "no match")}</span>`;
   const src = it.text_source && it.text_source !== "none" ?
     `<div class="muted small">text: ${esc(it.text_source)}</div>` : "";
