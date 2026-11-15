@@ -6,6 +6,15 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-14
 
 ### Changed
+- **Duration now qualifies matches.** The Duration detector compares a file with the
+  combined TVDB runtime for its expected episode(s) and reports `actual / expected`
+  with the calibration and ratio used. Because TVDB runtimes can include advertisements,
+  intros, or combined multi-episode listings, the comparison is calibrated from at least
+  five already-settled files in the same season and episode-count cohort; a softer
+  uncalibrated comparison is shown without vetoing a plan. Once calibrated, an impossible
+  runtime converts an automatic match or proposed move into a review and unselects it,
+  while merely unusual runtimes leave the action available but unchecked. Plan version
+  20 rebuilds existing draft plans without a rescan.
 - **Weak dialogue detections are no longer green.** A dialogue candidate below the
   configured `min_score` now reports amber/inconclusive with its score and threshold in
   the detail, even when another signal (such as a title card) settles the row. Plan

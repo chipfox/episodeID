@@ -15,6 +15,7 @@ Item kinds:
 from __future__ import annotations
 
 import re
+import statistics
 from pathlib import Path
 
 import os
@@ -354,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 19
+PLAN_VERSION = 20
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -664,6 +665,188 @@ def _clock(seconds) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+# Runtime metadata is useful, but TVDB does not consistently describe whether its
+# runtime includes ads, intros, or a multi-episode listing. Learn each series/season's
+# scale from files the previous scan already settled; without that baseline the raw
+# comparison is shown but does not decide the plan.
+DURATION_OK_RANGE = (0.72, 1.40)
+DURATION_WARN_RANGE = (0.55, 1.85)
+DURATION_HARD_RANGE = (0.25, 4.00)
+DURATION_UNCALIBRATED_RANGE = (0.45, 2.20)
+
+
+def _duration_factors(files: list[dict], eps: dict) -> dict:
+    """Median file-to-TVDB runtime ratios for cohorts already settled by a scan."""
+    samples: dict[tuple, list[float]] = {}
+
+    def add(key: tuple, ratio: float) -> None:
+        samples.setdefault(key, []).append(ratio)
+
+    for f in files:
+        if f.get("status") != "OK" or f.get("manual"):
+            continue
+        if any(sg.get("override") for sg in f.get("segments") or []):
+            continue
+        expected = list(dict.fromkeys(f.get("expected") or []))
+        duration = float(f.get("duration") or 0)
+        if not expected or duration <= 0:
+            continue
+        runtimes = []
+        seasons = set()
+        for code in expected:
+            episode = eps.get(code) or {}
+            runtime = float(episode.get("runtime") or 0)
+            season = episode.get("season")
+            if runtime <= 0 or season is None:
+                runtimes = []
+                break
+            runtimes.append(runtime)
+            seasons.add(season)
+        if not runtimes or len(seasons) != 1:
+            continue
+        ratio = duration / (sum(runtimes) * 60.0)
+        if not 0.10 <= ratio <= 10.0:
+            continue
+        season = next(iter(seasons))
+        count = len(expected)
+        for key in ((season, count), (season, "*"), ("*", count), ("*", "*")):
+            add(key, ratio)
+
+    factors = {}
+    for key, ratios in samples.items():
+        specific = key[0] != "*" and key[1] != "*"
+        partial = key[0] != "*" or key[1] != "*"
+        required = 5 if specific else (10 if partial else 20)
+        if len(ratios) >= required:
+            factors[key] = float(statistics.median(ratios))
+    return factors
+
+
+def _duration_factor(factors: dict, codes: list[str], eps: dict) -> tuple[float, bool]:
+    season = (eps.get(codes[0]) or {}).get("season") if codes else None
+    count = len(codes)
+    for key in ((season, count), (season, "*"), ("*", count), ("*", "*")):
+        value = factors.get(key)
+        if value is not None:
+            return float(value), True
+    return 1.0, False
+
+
+def _duration_state(ratio: float, calibrated: bool) -> str:
+    if calibrated:
+        hard_low, hard_high = DURATION_HARD_RANGE
+        if ratio < hard_low or ratio > hard_high:
+            return "fail"
+        ok_low, ok_high = DURATION_OK_RANGE
+        if ok_low <= ratio <= ok_high:
+            return "ok"
+        warn_low, warn_high = DURATION_WARN_RANGE
+        return "warn" if warn_low <= ratio <= warn_high else "fail"
+    good_low, good_high = DURATION_UNCALIBRATED_RANGE
+    return "info" if good_low <= ratio <= good_high else "warn"
+
+
+def _duration_evidence(item: dict, factors: dict, eps: dict) -> dict:
+    duration = float(item.get("duration") or 0)
+    codes = list(dict.fromkeys(item.get("codes") or item.get("expected") or []))
+    base = {
+        "state": "skip", "codes": codes, "duration_seconds": duration,
+        "expected_seconds": 0.0, "factor": 1.0, "calibrated": False,
+        "ratio": None, "hard": False,
+    }
+    if duration <= 0:
+        return {**base, "detail": "No duration was available from the media file."}
+    if not codes:
+        return {**base, "detail": "No episode is expected for this file."}
+    runtimes = []
+    for code in codes:
+        runtime = float((eps.get(code) or {}).get("runtime") or 0)
+        if runtime <= 0:
+            return {**base, "detail": f"TVDB has no runtime for {', '.join(codes)}."}
+        runtimes.append(runtime)
+
+    target = sum(runtimes) * 60.0
+    factor, calibrated = _duration_factor(factors, codes, eps)
+    # A multi-part listing can carry the combined runtime on each part. Only a file
+    # already verified as one multi-part release may collapse to that shorter scale.
+    candidates = [target]
+    if len(set(runtimes)) == 1 and item.get("decided_by") == "parts":
+        candidates.append(target / len(runtimes))
+    target = min(candidates, key=lambda candidate: abs(duration / (candidate * factor) - 1.0))
+    expected = target * factor
+    ratio = duration / expected
+    return {
+        **base,
+        "state": _duration_state(ratio, calibrated),
+        "expected_seconds": expected,
+        "factor": factor,
+        "calibrated": calibrated,
+        "ratio": ratio,
+        "hard": ratio < DURATION_HARD_RANGE[0] or ratio > DURATION_HARD_RANGE[1],
+        "detail": (
+            f"TVDB {target / 60.0:g} min"
+            + (f" · this series runs {factor:.2f}× that" if calibrated else " · no duration baseline yet")
+            + f" · expected {_clock(expected)} · file is {ratio:.2f}× expected"
+        ),
+    }
+
+
+def _duration_method(check: dict) -> dict:
+    duration = check.get("duration_seconds") or 0
+    expected = check.get("expected_seconds") or 0
+    result = "no duration"
+    if duration > 0 and expected > 0:
+        result = f"{_clock(duration)} / {_clock(expected)}"
+    elif duration > 0:
+        result = _clock(duration)
+    return {
+        "key": "duration", "label": "Duration", "state": check.get("state", "skip"),
+        "result": result, "detail": check.get("detail", ""),
+    }
+
+
+def _manual_decision(item: dict) -> bool:
+    return item.get("decided_by") == "you" or any(
+        sg.get("override") for sg in item.get("segments") or [])
+
+
+def _append_reason(item: dict, note: str) -> None:
+    old = (item.get("reason") or "").strip(" .")
+    item["reason"] = f"{old}. {note}" if old else note
+
+
+def _apply_duration_checks(items: list[dict], factors: dict, eps: dict) -> None:
+    """Grade the proposed episode against its expected runtime and block impossible moves."""
+    for it in items:
+        check = _duration_evidence(it, factors, eps)
+        it["duration_check"] = check
+        methods = it.setdefault("methods", [])
+        methods[:] = [m for m in methods if m.get("key") != "duration"]
+        methods.append(_duration_method(check))
+        if (check["state"] not in ("warn", "fail") or not check["calibrated"]
+                or _manual_decision(it)):
+            continue
+        if check["state"] == "warn":
+            if it["kind"] not in ACTIONABLE:
+                continue
+            it["selected"] = False
+            _append_reason(it, f"Runtime looks off: {_duration_method(check)['result']} "
+                               f"({check['detail']}).")
+            continue
+        if it["kind"] == "ok":
+            it["kind"] = "review"
+            it["suggested"] = list(it.get("expected") or [])
+        elif it["kind"] in ACTIONABLE:
+            it["selected"] = False
+            it["suggested"] = list(it.get("codes") or it.get("expected") or [])
+        elif it["kind"] == "review":
+            it["selected"] = False
+        if it["kind"] in ("rename", "split", "join", "aside"):
+            it["kind"] = "review"
+        _append_reason(it, f"Runtime does not qualify this match: {_duration_method(check)['result']} "
+                           f"({check['detail']}).")
+
+
 def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
                        parts_why: str) -> list[dict]:
     """What each detector did for this file, for the plan UI.
@@ -773,14 +956,6 @@ def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
                               releases[0].get("code") or "used",
                               "The release name contributed to the match."))
 
-    if f.get("duration"):
-        runtime = next((float(e.get("runtime")) for e in series.get("episodes") or []
-                        if f"S{e.get('season', 0):02d}E{e.get('episode', 0):02d}"
-                        in (f.get("expected") or [])
-                        and e.get("runtime")), None)
-        detail = f"TVDB runtime {runtime:.0f} min" if runtime else "file metadata"
-        methods.append(method("duration", "Duration", "info",
-                              _clock(f.get("duration")), detail))
     return methods
 
 
@@ -793,6 +968,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     series_name = (series.get("options") or {}).get("name_in_files") or root.name
 
     files = scan["files"]
+    duration_factors = _duration_factors(files, eps)
     files_by_rel = {f["rel"]: f for f in files}
     items: list[dict] = []
     overrides = (series.get("options") or {}).get("overrides") or {}
@@ -1223,6 +1399,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 it["reason"] = ((reason.rstrip(" .") + " — " if reason else "") +
                                 "the dialogue came from a sidecar (third-party text); "
                                 "check this before applying")
+
+    _apply_duration_checks(items, duration_factors, eps)
 
     for i, it in enumerate(items):
         it["id"] = i
