@@ -66,9 +66,12 @@ select:focus-visible, textarea:focus-visible, summary:focus-visible, [tabindex]:
 
 .series-card .name { font-weight: 600; font-size: 15px; }
 .series-card .name a { color: inherit; }
+.series-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: start;
+  margin: 3px 0 5px; padding: 8px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .metric-heading { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px;
   color: var(--muted); font-size: 9.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
-.series-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 8px; min-height: 31px; }
+.series-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 31px; }
+.series-status .series-actions { margin-top: 0; padding-top: 0; justify-content: flex-end; }
 .series-grid { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .bar { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; }
 .bar > div { height: 100%; background: var(--accent); transition: width .3s; }

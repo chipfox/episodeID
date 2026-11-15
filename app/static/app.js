@@ -265,17 +265,19 @@ async function renderHome() {
       return `<div class="card series-card" data-id="${s.id}">
         <div class="name"><a href="#/series/${s.id}" class="series-open">${esc(s.name)}</a> <span class="muted">${esc(s.year)}</span></div>
         <div class="path muted">${esc(s.path)}</div>
+        <div class="series-status">
+          <div class="counts">${counts}</div>
+          ${seriesCardActions(s)}
+        </div>
+        <div class="metric-heading" title="${esc(s.name)} counts video files; multi-episode files and missing episodes mean the file total need not equal the episode total"><span>File verification</span></div>
+        ${fileCheckLine(s)}${s.file_check && s.file_check.checked_at ? importLine(s.file_check) : ""}
         <div class="metric-heading"><span>Reference coverage</span><span>${pct}%</span></div>
         <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"
           aria-label="${esc(s.name)} reference coverage" title="${s.reference_count} of ${s.episode_count} episodes have a dialogue reference"><div style="width:${pct}%"></div></div>
         <div class="small muted"><b>${s.reference_count}</b> of ${s.episode_count} episodes have a dialogue reference</div>
         <div class="metric-heading">Detection evidence</div>
         <div>${titleCardBadge(s)}</div>
-        <div class="metric-heading">File verification</div>
-        <div class="counts">${counts}</div>
-        ${fileCheckLine(s)}${s.file_check && s.file_check.checked_at ? importLine(s.file_check) : ""}
         ${backupLine(s)}${integrityLine(s)}
-        ${seriesCardActions(s)}
       </div>`;
     }).join("") + `</div>`;
   }
