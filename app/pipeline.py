@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import autocheck
 from . import db, evidence, fandom, llm, titlecard, tvdb
-from .config import get_settings
+from .config import get_settings, safe_media_path
 from .executor import (apply_plan, migrate_legacy_backup, sonarr_rescan, sonarr_series_type_note,
                        undo_apply)
 from .jobs import Cancelled, handler
@@ -1482,6 +1482,58 @@ def _title_card_swaps(files: list[dict], ctx) -> None:
             a["note"] = f"swapped with {Path(b['rel']).name} (title cards)"
             done.add(a["rel"])
         ctx.log(f"Title cards: {f['rel']} and {g['rel']} each show the other's title — swapped.")
+
+
+@handler("titlecard_check")
+def job_titlecard_check(ctx, params):
+    """Run one manual title-card inspection and make its verdict part of the job log."""
+    series = _series(ctx)
+    if not titlecard.available():
+        raise RuntimeError("The OCR engine isn't installed in this image")
+
+    root = Path(series["path"])
+    rel = str(params.get("source") or "").strip()
+    if not rel:
+        raise RuntimeError("No file was selected")
+    try:
+        video = safe_media_path(root / rel)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if root.resolve() not in video.parents or not video.is_file():
+        raise RuntimeError("File not found")
+
+    start = max(0.0, float(params.get("start") or 0))
+    end = max(start + 1.0, float(params.get("end") or start + 90))
+    length = min(180.0, end - start)
+    mode = "key" if params.get("mode") == "key" else "full"
+    decode = "cpu" if params.get("decode") == "cpu" else "auto"
+    opts = series.get("options") or {}
+    recurring = (opts.get("title_cards_status") or {}).get("recurring")
+    index = titlecard.TitleIndex(series["episodes"], bool(opts.get("include_specials")),
+                                 recurring if isinstance(recurring, dict) else None,
+                                 titlecard.series_names(series))
+
+    ctx.status(f"Title cards: {video.name}")
+    ctx.check_cancel()
+    ctx.log(f"Title card check: {rel} · {_fmt_t(start)}–{_fmt_t(start + length)} · "
+            f"{mode} frames · requested decode {decode}")
+    try:
+        result = titlecard.inspect(video, start, length, index, decode, mode)
+    except titlecard.TitleCardUnavailable as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    check = result["result"]
+    ctx.log(f"Title card result: {check['status']} — {check['headline']} ({check['detail']})")
+    for card in result.get("cards") or []:
+        outcome = (f"partial → {', '.join(card.get('candidates') or ['unread'])}"
+                   if card.get("partial") else f"→ {card.get('code')} {card.get('title')}")
+        ctx.log(f"  {_fmt_t(card['time'])}: “{card.get('text')}” {outcome}")
+    if not result.get("cards"):
+        ctx.log("  no recognized title card in the checked range")
+    ctx.log(f"Title card check finished: {len(result['frames'])} frames · decode "
+            f"{result['decode'].upper()}" + (f" · OCR {result['ocr']}" if result.get("ocr") else ""))
+    ctx.check_cancel()
+    return result
 
 
 def _titlecard_effective_mode(mode: str, manual: bool) -> str:

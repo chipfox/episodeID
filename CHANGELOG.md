@@ -24,6 +24,11 @@ Changelog; release image tags identify their source commit.
   “Rescan, re-reading title cards” action now checks every file included in that scan
   pass, overriding the automatic probe, series off setting, dialogue-confirmed scope,
   and summary-confirmed skips. The global title-card setting remains a hard kill switch.
+- **Manual title-card checks are durable jobs.** Each per-file “Check title cards”
+  action now runs through the normal job queue and appears in the series log with its
+  file, time range, decode and OCR backend, per-card findings, and final verdict. The
+  GUI polls that same job and renders its stored result, so the visible scan log and the
+  check summary cannot diverge.
 - **Weak dialogue detections are no longer green.** A dialogue candidate below the
   configured `min_score` now reports amber/inconclusive with its score and threshold in
   the detail, even when another signal (such as a title card) settles the row. Plan
