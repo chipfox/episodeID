@@ -1320,7 +1320,7 @@ async function referenceDialog(code) {
 function methodsHtml(methods) {
   if (!methods || !methods.length) return "";
   return `<div class="methods" aria-label="Detection methods">${methods.map((m) => {
-    const icon = m.key === "duration" ? "⏱" : (METHOD_ICON[m.state] || "–");
+    const icon = METHOD_ICON[m.state] || "–";
     return `<div class="method ${esc(m.state || "info")}" title="${esc([m.label, m.result, m.detail].filter(Boolean).join(" — "))}">
       <span class="m-ico">${icon}</span>
       <span class="m-label">${esc(m.label)}</span>

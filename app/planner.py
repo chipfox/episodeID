@@ -794,9 +794,11 @@ def _duration_evidence(item: dict, factors: dict, eps: dict) -> dict:
 def _duration_method(check: dict) -> dict:
     duration = check.get("duration_seconds") or 0
     expected = check.get("expected_seconds") or 0
+    ratio = check.get("ratio")
     result = "no duration"
     if duration > 0 and expected > 0:
-        result = f"{_clock(duration)} / {_clock(expected)}"
+        ratio_text = f" · {float(ratio):.2f}×" if ratio else ""
+        result = f"{_clock(duration)} vs {_clock(expected)}{ratio_text}"
     elif duration > 0:
         result = _clock(duration)
     return {
@@ -815,6 +817,14 @@ def _append_reason(item: dict, note: str) -> None:
     item["reason"] = f"{old}. {note}" if old else note
 
 
+def _duration_note(check: dict) -> str:
+    duration = float(check.get("duration_seconds") or 0)
+    expected = float(check.get("expected_seconds") or 0)
+    ratio = float(check.get("ratio") or 1)
+    return (f"{_clock(duration)} file is {ratio:.2f}× the expected {_clock(expected)} "
+            f"({check.get('detail', '')})")
+
+
 def _apply_duration_checks(items: list[dict], factors: dict, eps: dict) -> None:
     """Grade the proposed episode against its expected runtime and block impossible moves."""
     for it in items:
@@ -830,8 +840,7 @@ def _apply_duration_checks(items: list[dict], factors: dict, eps: dict) -> None:
             if it["kind"] not in ACTIONABLE:
                 continue
             it["selected"] = False
-            _append_reason(it, f"Runtime looks off: {_duration_method(check)['result']} "
-                               f"({check['detail']}).")
+            _append_reason(it, f"Runtime looks off: {_duration_note(check)}.")
             continue
         if it["kind"] == "ok":
             it["kind"] = "review"
