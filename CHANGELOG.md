@@ -6,6 +6,13 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-14
 
 ### Changed
+- **Row controls use one visual language.** Compare, Rescan, and More now share the
+  same 82×27 size, fill, border, radius, and baseline. The More `<summary>` receives
+  the same specificity and box model as a normal button instead of retaining its
+  default smaller list-item styling.
+- **Plan badges get a dedicated flex row.** The status/origin badges now wrap with a
+  consistent 6 px gap, preventing them from touching or overlapping as badge counts
+  or browser font metrics change.
 - **Plan spacing uses the available viewport.** The page now scales up to 1500 px,
   and the plan columns rebalance so the checkbox stays 44 px, filename and evidence
   receive the recovered width, detection rows remain compact, and Actions stays just
