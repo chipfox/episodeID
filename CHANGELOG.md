@@ -6,6 +6,10 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-14
 
 ### Changed
+- **Evidence segments now have a real layout.** Each segment is a block with dedicated
+  flex rows for its primary result and title-card/receipt details. Episode pills, title
+  cards, times, titles, and references receive a consistent 6 px gap instead of relying
+  on collapsed HTML whitespace; warnings and alternatives sit on their own note lines.
 - **Row controls use one visual language.** Compare, Rescan, and More now share the
   same 82×27 size, fill, border, radius, and baseline. The More `<summary>` receives
   the same specificity and box model as a normal button instead of retaining its
