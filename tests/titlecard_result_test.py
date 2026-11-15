@@ -4,7 +4,14 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from app.titlecard import _inspection_result
+from app.titlecard import _diagnostic_hit, _inspection_result, cards_from_frames
+
+matched_hit = {"code": "S01E01", "title": "Pilot", "text": "PILOT", "score": 0.91,
+               "partial": False, "candidates": []}
+diagnostic_hit = _diagnostic_hit(matched_hit)
+assert diagnostic_hit is not None and diagnostic_hit["score"] == 0.91
+grouped = cards_from_frames([{"t": 22.0, "hit": diagnostic_hit}])
+assert grouped and grouped[0]["code"] == "S01E01", grouped
 
 full = [{"code": "S01E01", "title": "Pilot", "text": "PILOT", "time": 22.0,
          "frames": 4, "score": 0.91}]

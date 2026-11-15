@@ -850,6 +850,14 @@ def _scan_pass(video: Path, start: float, length: float, index: TitleIndex,
     return frames
 
 
+def _diagnostic_hit(hit: dict | None) -> dict | None:
+    """The hit fields the manual inspector and card grouper both need."""
+    if not hit:
+        return None
+    return {k: hit.get(k) for k in
+            ("code", "title", "text", "partial", "candidates", "score")}
+
+
 def _fmt_clock(seconds) -> str:
     seconds = max(0, int(float(seconds or 0)))
     return f"{seconds // 60}:{seconds % 60:02d}"
@@ -918,7 +926,7 @@ def inspect(video: Path, start: float, length: float, index: TitleIndex,
         lines = _ocr_frame(img)
         hit = index.match_frame(lines, t)  # the range is taken as starting with the episode
         out.append({"t": t, "lines": lines, "size": [int(img.shape[1]), int(img.shape[0])],
-                    "hit": hit and {k: hit.get(k) for k in ("code", "title", "text", "partial", "candidates")}})
+                    "hit": _diagnostic_hit(hit)})
     cards = cards_from_frames(out)
     acceleration = acceleration_status()
     return {"decode": used, "ocr": acceleration.get("ocr"), "mode": mode, "fps": fps,
