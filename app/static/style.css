@@ -88,7 +88,8 @@ td.check { width: 28px; }
 .arrow { color: var(--muted); margin: 2px 0; }
 .seg { display: block; margin: 0 0 10px; }
 .seg-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.seg-note { margin-top: 3px; line-height: 1.35; }
+.seg > * + * { margin-top: 6px; }
+.seg-note { line-height: 1.45; }
 
 .job { margin-top: 14px; }
 .job pre { max-height: 260px; overflow: auto; background: var(--panel-2); border-radius: 6px; padding: 10px;
@@ -310,7 +311,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 }
 
 .plan-table th.actions { text-align: right; padding-right: 8px; }
-.plan-table td.actions { padding-left: 6px; padding-right: 8px; vertical-align: middle; }
+.plan-table td.actions { padding-left: 6px; padding-right: 8px; vertical-align: top; }
 .plan-table input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; vertical-align: middle; }
 
 .plan-table .detect-cell { vertical-align: top; }
@@ -373,11 +374,11 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 /* Detection evidence: a compact vertical list, one detector per line. */
 .methods {
   display: grid; grid-template-columns: 1fr; gap: 2px;
-  margin: 5px 0 2px; max-width: 360px;
+  margin: 5px 0 2px; max-width: none;
 }
 .method {
-  display: grid; grid-template-columns: 16px 72px max-content;
-  align-items: baseline; gap: 6px; width: max-content; max-width: 100%;
+  display: grid; grid-template-columns: 16px 72px minmax(0, 1fr);
+  align-items: baseline; gap: 6px; width: auto; max-width: 100%;
   padding: 2px 6px; border-left: 2px solid transparent; border-radius: 5px;
   background: color-mix(in srgb, var(--panel-2) 74%, transparent);
   color: var(--text); font-size: 10.5px; font-weight: 500;
@@ -385,7 +386,7 @@ nav a.active { background: var(--panel-2); color: var(--text); }
 .method:hover { background: var(--panel-2); }
 .method .m-ico { font-size: 10px; font-weight: 800; text-align: center; }
 .method .m-label { color: var(--muted); font-weight: 650; }
-.method .m-value { justify-self: start; min-width: 0; font-variant-numeric: tabular-nums; }
+.method .m-value { justify-self: start; min-width: 0; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .method.ok .m-ico { color: var(--ok); }
 .method.warn .m-ico { color: var(--warn); }
 .method.fail .m-ico { color: var(--bad); }

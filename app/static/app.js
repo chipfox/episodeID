@@ -561,7 +561,7 @@ function segHtml(sg, eps) {
   if (altText) h += `<span class="muted small">${altText}</span>`;
   h += `</div>`;
   if (showWhy)
-    h += `<div class="small seg-note" style="color:var(--warn)">${esc(sg.why)}</div>`;
+    h += `<div class="small seg-note" style="color:var(--warn)">${esc(sg.why.replace(/title card reads '([^']+)'/g, 'title card reads “$1”'))}</div>`;
   if (sg.title_card) {
     const tc = sg.title_card, conflict = sg.confidence === "conflict";
     h += `<div class="small seg-line"><span class="badge ${conflict ? "b-warn" : "b-ok"}" title="OCR score ${tc.score}">title card</span>

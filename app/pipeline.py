@@ -1272,7 +1272,7 @@ def _apply_title_cards(f: dict, cards: list[dict], runtimes: dict | None = None,
                        "margin": 0, "alternatives": [], "title_card": c,
                        "confidence": "high" if ok else "conflict",
                        "evidence": "title+filename" if c["code"] in expected else "title",
-                       "why": "" if ok else f"title card reads '{c['text']}' ({c['code']}) where the "
+                       "why": "" if ok else f"title card reads “{c['text']}” ({c['code']}) where the "
                                             f"dialogue matched nothing; the filename says "
                                             f"{', '.join(expected)}"}
                 segs.insert(prev + 1, new)
@@ -1312,7 +1312,7 @@ def _apply_title_cards(f: dict, cards: list[dict], runtimes: dict | None = None,
                     and len({_expected_at(expected, t, dur) for t in (sg["start"] + 1, sg["end"] - 1)}
                             & set(story)) >= 2):
                 a, step = float(sg["start"]), (float(sg["end"]) - float(sg["start"])) / len(story)
-                why = (f"the title card reads the story's title ('{c['text']}'), the filename names its "
+                why = (f"the title card reads the story's title (“{c['text']}”), the filename names its "
                        f"parts {', '.join(story)}, and the dialogue matched {old} right across them — one "
                        "reference likely holds the whole story, so it can't tell the parts apart")
                 segs[idx:idx + 1] = [{**sg, "code": e, "start": round(a + i * step, 1),
@@ -1365,7 +1365,7 @@ def _apply_title_cards(f: dict, cards: list[dict], runtimes: dict | None = None,
                 # The card alone disagrees with the filename and with what the dialogue
                 # points to: don't let it decide by itself.
                 sg.update(confidence="conflict", title_conflict=c["code"],
-                          why=f"title card reads '{c['text']}' ({c['code']}) but "
+                          why=f"title card reads “{c['text']}” ({c['code']}) but "
                               + (f"dialogue matches {old}" if sg.get("confidence") == "high" else
                                  f"the filename says {', '.join(expected) or '—'} and the dialogue "
                                  f"is unclear ({old or '—'})"))
