@@ -6,7 +6,16 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
-- **One punctuation view for every comparison.** Smart apostrophes (`’ ‘ ` ´`)
+- **One shared word can now pair a diff row — through containment only.**
+  Sources drift at sentence boundaries: the ASR's "Then it would rule." is the
+  reference's "Yeah, then it would rule!", but `would` is a stopword and the
+  pair shared one content word, under the old floor of two. A lone shared word
+  pairs when one side sits wholly inside a side at least twice as long; the
+  Jaccard floor — unchanged — is what still rejects catchphrase and same-word
+  different-world lines (`NEAR_SHARED` 2→1, pinned both ways). The live Tornado
+  diff gained 6 pairs and lost 12 unpaired rows (50 exact / 39 similar /
+  26 file / 5 reference); display-only, no rescan.
+- **One punctuation view for every comparison.** Smart quotes (`’ ‘ ` ´`)
   tokenized as word-breakers everywhere — a subtitle's `DON’T` scored as "don"
   against an ASR's `DON'T` — so visually identical diff lines paired as nothing
   and word matching silently deflated in the matcher, duplicate guard and shared
