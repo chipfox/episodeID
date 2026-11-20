@@ -27,8 +27,10 @@ Changelog; release image tags identify their source commit.
   so they were unreadable side by side. `textsim.align()` splits each into sentences,
   pairs identical wording green, wording that differs but carries the line yellow
   (needs ≥3 shared content words in order — two bare "yeah"s never pair), and puts a
-  sentence found on only one side in its own row with the other side blank. The
-  dialog renders one table row per aligned sentence with a legend of the counts.
+  sentence found on only one side in its own row with the other side blank; a short
+  subtitle line also pairs with a longer transcript chunk that contains it (size
+  ratio ≥2, 75% contained) so Whisper's merged lines don't strand their subtitle.
+  The dialog renders one table row per aligned sentence with a legend of the counts.
 
 ### Fixed
 - **An apply no longer aborts mid-rename when something not in the plan sits at the
