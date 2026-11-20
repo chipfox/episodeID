@@ -10,6 +10,7 @@ question from "are these two documents the same".
 """
 from __future__ import annotations
 
+import difflib
 import re
 from collections import Counter
 
@@ -103,3 +104,143 @@ def overlap(a_grams: set[tuple[str, str]], b_grams: set[tuple[str, str]]) -> flo
         return 0.0
     return len(a_grams & b_grams) / min(len(a_grams), len(b_grams))
 
+
+
+# ---------------------------------------------------------------------- alignment
+# Reading aid for the compare dialog: lay the two transcripts out sentence by
+# sentence so the same line shares a row on both sides. "same" = identical once
+# punctuation, case and speaker dashes are ignored; "near" = different words
+# carrying the same line (a speech-to-text read rarely matches subtitle
+# punctuation word for word); a blank side = the sentence appears only there.
+# The thresholds keep near from pairing two exclamations that merely share a
+# "yeah": a pair must agree on several distinct content words, in order.
+
+NEAR_SIMILARITY = 0.4   # Jaccard of content words needed to call a pair the same line
+NEAR_SHARED = 3         # ... and how many distinct shared content words that takes
+MAX_DIFF_ROWS = 4000    # a transcript this long in sentences is past readable anyway
+_MAX_PAIR_CELLS = 120_000  # DP budget for pairing one changed block
+
+_KW_WORD = re.compile(r"[a-z][a-z']+")
+_SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+|\s+-\s+")
+
+
+def chunks(text: str) -> list[str]:
+    """Sentence-sized display units of a transcript.
+
+    Both sources arrive as one run-on line — Whisper with sentence punctuation,
+    subtitles with " - " between speakers — so lines mean nothing here; split on
+    sentence ends and speaker dashes, then fold fragments too short to stand
+    alone into the sentence before them.
+    """
+    out: list[str] = []
+    for line in re.split(r"[\r\n]+", text or ""):
+        line = line.replace("*", " ")  # Whisper's music markers
+        for part in _SENT_SPLIT.split(line):
+            part = part.strip(" \t\"'“”‘’")
+            if part:
+                out.append(part)
+    merged: list[str] = []
+    for c in out:
+        if merged and len(c.split()) < 3:
+            merged[-1] = merged[-1] + " " + c
+        else:
+            merged.append(c)
+    return merged
+
+
+def _norm(chunk: str) -> str:
+    return " ".join(_KW_WORD.findall(chunk.lower()))
+
+
+def _keywords(chunk: str) -> frozenset:
+    return frozenset(w for w in _KW_WORD.findall(chunk.lower())
+                     if len(w) > 2 and w not in ENGLISH_STOP_WORDS)
+
+
+def _line_similarity(ka: frozenset, kb: frozenset) -> float:
+    shared = len(ka & kb)
+    if shared < NEAR_SHARED:
+        return 0.0
+    return shared / len(ka | kb)
+
+
+def _pair_block(al: list[str], bl: list[str], near: float) -> list[tuple]:
+    """Best order-preserving pairing of two runs of unmatched sentences.
+
+    Needleman-Wunsch over sentence pairs: pairing two scores by their content-word
+    Jaccard, skipping either side costs nothing. That keeps pairs monotonic (the
+    diff never crosses itself) while still matching a garbled Whisper line to its
+    subtitle counterpart.
+    """
+    n, m = len(al), len(bl)
+    if not n or not m:
+        return [(i, None) for i in range(n)] + [(None, j) for j in range(m)]
+    ka = [_keywords(c) for c in al]
+    kb = [_keywords(c) for c in bl]
+    dp = [[0.0] * (m + 1) for _ in range(n + 1)]
+    bt = [[0] * (m + 1) for _ in range(n + 1)]  # 0 pair, 1 file-only, 2 reference-only
+    for i in range(1, n + 1):
+        bt[i][0] = 1
+    for j in range(1, m + 1):
+        bt[0][j] = 2
+    for i in range(1, n + 1):
+        row_prev, row = dp[i - 1], dp[i]
+        for j in range(1, m + 1):
+            s = _line_similarity(ka[i - 1], kb[j - 1])
+            pair = row_prev[j - 1] + (s if s >= near else float("-inf"))
+            up, left = row_prev[j], row[j - 1]
+            if pair >= up and pair >= left:
+                row[j], bt[i][j] = pair, 0
+            elif up >= left:
+                row[j], bt[i][j] = up, 1
+            else:
+                row[j], bt[i][j] = left, 2
+    pairs: list[tuple] = []
+    i, j = n, m
+    while i or j:
+        t = bt[i][j]
+        if t == 0:
+            pairs.append((i - 1, j - 1)); i -= 1; j -= 1
+        elif t == 1:
+            pairs.append((i - 1, None)); i -= 1
+        else:
+            pairs.append((None, j - 1)); j -= 1
+    pairs.reverse()
+    return pairs
+
+
+def align(a: str, b: str, near: float = NEAR_SIMILARITY) -> dict:
+    """Align two transcripts into rows a two-column view can render directly.
+
+    Rows are {"kind": same|near|file|ref, "left": str, "right": str} (empty when
+    that side has no sentence), in reading order, and every sentence of both
+    texts lands in exactly one row.
+    """
+    ac, bc = chunks(a), chunks(b)
+    sm = difflib.SequenceMatcher(None, [_norm(c) for c in ac],
+                                 [_norm(c) for c in bc], autojunk=False)
+    rows: list[dict] = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            rows.extend({"kind": "same", "left": ac[i1 + k], "right": bc[j1 + k]}
+                        for k in range(i2 - i1))
+        elif tag == "delete":
+            rows.extend({"kind": "file", "left": ac[i], "right": ""} for i in range(i1, i2))
+        elif tag == "insert":
+            rows.extend({"kind": "ref", "left": "", "right": bc[j]} for j in range(j1, j2))
+        elif (i2 - i1) * (j2 - j1) > _MAX_PAIR_CELLS:
+            rows.extend({"kind": "file", "left": ac[i], "right": ""} for i in range(i1, i2))
+            rows.extend({"kind": "ref", "left": "", "right": bc[j]} for j in range(j1, j2))
+        else:
+            for i, j in _pair_block(ac[i1:i2], bc[j1:j2], near):
+                if i is not None and j is not None:
+                    rows.append({"kind": "near", "left": ac[i1 + i], "right": bc[j1 + j]})
+                elif i is not None:
+                    rows.append({"kind": "file", "left": ac[i1 + i], "right": ""})
+                else:
+                    rows.append({"kind": "ref", "left": "", "right": bc[j1 + j]})
+    counts = {"same": 0, "near": 0, "file": 0, "ref": 0}
+    for r in rows:
+        counts[r["kind"]] += 1
+    return {"rows": rows[:MAX_DIFF_ROWS], "counts": counts,
+            "truncated": len(rows) > MAX_DIFF_ROWS}

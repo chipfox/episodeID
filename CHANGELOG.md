@@ -22,6 +22,13 @@ Changelog; release image tags identify their source commit.
   and opens the normal Apply confirmation, which now lists each file → new path and
   says sidecars move along. A disabled Apply button explains itself when the checked
   rows hold no pending change instead of reading "Apply 0 changes".
+- **The Compare dialog now aligns the two transcripts like a diff.** Both arrive as
+  one run-on line (Whisper with sentence punctuation, subtitles with speaker dashes),
+  so they were unreadable side by side. `textsim.align()` splits each into sentences,
+  pairs identical wording green, wording that differs but carries the line yellow
+  (needs ≥3 shared content words in order — two bare "yeah"s never pair), and puts a
+  sentence found on only one side in its own row with the other side blank. The
+  dialog renders one table row per aligned sentence with a legend of the counts.
 
 ### Fixed
 - **An apply no longer aborts mid-rename when something not in the plan sits at the

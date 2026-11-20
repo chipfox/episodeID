@@ -1266,13 +1266,12 @@ async function evidenceDialog(rel, code) {
     <div class="ev-grid">
       <div class="ev-col"><div class="ev-head"><b>File dialogue</b>
         <span class="muted small">${esc(evMeta(f))}</span></div>
-        <div class="muted small ev-src" title="${esc(f.source)}">${esc(f.source)}${sampled ? " · the verdict used a sample" : ""}</div>
-        <pre class="ev-text">${esc(f.text || "(no transcript was read for this file)")}</pre></div>
+        <div class="muted small ev-src" title="${esc(f.source)}">${esc(f.source)}${sampled ? " · the verdict used a sample" : ""}</div></div>
       <div class="ev-col"><div class="ev-head"><b>Reference</b>
         <select id="ev-pick"></select></div>
-        <div class="muted small ev-src" id="ev-ref-meta"></div>
-        <pre class="ev-text" id="ev-ref"></pre></div>
+        <div class="muted small ev-src" id="ev-ref-meta"></div></div>
     </div>
+    <div id="ev-body" class="ev-grid"></div>
     <div class="ev-score" id="ev-score"></div>`, { sticky: true, wide: true });
   $("#ev-close", box).onclick = () => closeModal();
   const fullBtn = $("#ev-full", box);
@@ -1287,11 +1286,23 @@ async function evidenceDialog(rel, code) {
       .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.code)}${e.title ? " — " + esc(e.title) : ""}${e.match ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
     const r = next.reference;
     const m = next.episodes.find((e) => e.code === next.code)?.match;
-    $("#ev-ref", box).textContent = r ? r.text
-      : "No reference for this episode — fetch references, or upload/paste a transcript in Episodes & references.";
     $("#ev-ref-meta", box).textContent = r
       ? `${r.source} · ${r.words} words${m ? ` · scan match ${m.score.toFixed(3)} (${m.confidence || "?"})` : ""}`
       : "";
+    const body = $("#ev-body", box);
+    const diff = next.file.text && r ? next.diff : null;
+    if (diff && diff.rows.length) {
+      // One table, one row per aligned sentence: matched rows share a line,
+      // green when the words agree, yellow when they merely say the same thing.
+      body.className = "ev-diffwrap";
+      body.innerHTML = `<table class="difftab"><tbody>${diff.rows.map((x) =>
+        `<tr class="d-${esc(x.kind)}"><td>${esc(x.left)}</td><td>${esc(x.right)}</td></tr>`).join("")}</tbody></table>`;
+    } else {
+      // No alignment without both texts: fall back to two plain columns.
+      body.className = "ev-grid";
+      body.innerHTML = `<div class="ev-col"><pre class="ev-text">${esc(next.file.text || "(no transcript was read for this file)")}</pre></div>` +
+        `<div class="ev-col"><pre class="ev-text">${esc(r ? r.text : "No reference for this episode — fetch references, or upload/paste a transcript in Episodes & references.")}</pre></div>`;
+    }
     const lines = [];
     const nf = next.file;
     if (next.containment != null) {
@@ -1305,6 +1316,13 @@ async function evidenceDialog(rel, code) {
     } else if (nf.words) {
       lines.push(`<div class="muted">Too little dialogue to compare — ${nf.bigrams || 0} word pairs, ` +
         `${next.bigram_floor} needed.</div>`);
+    }
+    if (diff && diff.rows.length) {
+      const c = diff.counts;
+      lines.push(`<div class="ev-legend"><span class="lg lg-same"></span>${c.same} in both · ` +
+        `<span class="lg lg-near"></span>${c.near} say the same thing differently · ` +
+        `<span class="lg lg-one"></span>${c.file} only in the file · ${c.ref} only in the reference` +
+        `${diff.truncated ? " · list truncated" : ""}</div>`);
     }
     if (next.shared.length) {
       lines.push(`<div class="wrap-row">shared: ${next.shared.map((w) => `<span class="badge">${esc(w)}</span>`).join(" ")}</div>`);

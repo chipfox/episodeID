@@ -750,7 +750,7 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
     ref = refs.get(chosen) or {}
     ref_text = str(ref.get("text") or "")
     matches = episode_match(series)
-    contains, shared, ranked = None, [], []
+    contains, shared, ranked, diff = None, [], [], None
     if file_out and file_out["text"] and refs:
         query = textsim.bigrams(file_out["text"])
         file_out["bigrams"] = len(query)
@@ -763,6 +763,10 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
             hit = next((v for v, c in pairs if c == chosen), None)
             contains = round(hit, 4) if hit is not None else None
             shared = textsim.shared_terms(file_out["text"], ref_text)
+        if ref_text:
+            # Sentence-by-sentence alignment for the compare view; useful even
+            # below the bigram floor, where no score can be trusted.
+            diff = textsim.align(file_out["text"], ref_text)
 
     return {
         "file": file_out,
@@ -776,6 +780,7 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
         "bigram_floor": textsim.BIGRAM_FLOOR,
         "shared": shared,
         "ranked": ranked,
+        "diff": diff,
     }
 
 

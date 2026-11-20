@@ -173,4 +173,44 @@ save_ref("S01E01", transcript(200, ("albatross", "harbor"), 21))
 after = c.get(f"/api/series/{sid}/evidence", params={"rel": rel}).json()
 assert after["containment"] is not None and after["containment"] < 0.35, after["containment"]
 
-print("PASS (evidence view + shared terms)")
+# The compare view aligns the two texts sentence by sentence: identical wording
+# (punctuation and speaker dashes ignored) is "same", wording that differs but
+# carries the line is "near", and a sentence from only one side keeps its row
+# with the other side blank. Both sources are one run-on line, so this must
+# chunk on sentence ends, not newlines.
+from app.textsim import chunks  # noqa: E402
+
+db.update_series(sid, episodes=[
+    {"season": 1, "episode": 1, "title": "Pilot", "aired": "2020-01-01"},
+    {"season": 1, "episode": 2, "title": "The Lighthouse", "aired": "2020-01-08"},
+    {"season": 1, "episode": 3, "title": "Radio", "aired": "2020-01-15"},
+    {"season": 1, "episode": 4, "title": "Silent", "aired": "2020-01-22"},
+])
+save_ref("S01E03", "Alpha bravo charlie delta? Echo foxtrot golf hotel india "
+                   "juliett! Victor whiskey xray. Kilo lima Mike november oscar "
+                   "papa quebec? Romeo sierra tango - uniform.")
+(tv / "Season 1" / "Show - S01E03 - Radio.mkv").write_bytes(b"y" * 4096)
+db.add_scan(sid, {"files": [{
+    "rel": "Season 1/Show - S01E03 - Radio.mkv", "status": "OK", "note": "",
+    "text_source": "test-asr", "scope": "full",
+    "sample_text": "Alpha bravo charlie delta. Echo foxtrot golf hotel india juliett. "
+                   "Kilo lima. Mike november oscar papa quebec. Romeo sierra tango!",
+    "expected": ["S01E03"], "segments": []}], "counts": {}})
+da = c.get(f"/api/series/{sid}/evidence",
+           params={"rel": "Season 1/Show - S01E03 - Radio.mkv", "code": "S01E03"}).json()
+rows = da["diff"]["rows"]
+assert [r["kind"] for r in rows] == ["same", "near", "ref", "near", "near"], rows
+assert rows[0]["left"] == "Alpha bravo charlie delta." \
+    and rows[0]["right"] == "Alpha bravo charlie delta?"
+assert rows[2]["left"] == "" and rows[2]["right"] == "Victor whiskey xray."
+# Every sentence of both texts lands in exactly one row, in order.
+assert [r["left"] for r in rows if r["kind"] != "ref"] == chunks(da["file"]["text"])
+assert [r["right"] for r in rows if r["kind"] != "file"] == chunks(da["reference"]["text"])
+assert da["diff"]["truncated"] is False
+# No file side (the Episodes table view) and no reference both mean no alignment.
+assert c.get(f"/api/series/{sid}/evidence", params={"code": "S01E03"}).json()["diff"] is None
+anone = c.get(f"/api/series/{sid}/evidence",
+              params={"rel": "Season 1/Show - S01E03 - Radio.mkv", "code": "S01E04"}).json()
+assert anone["reference"] is None and anone["diff"] is None
+
+print("PASS (evidence view + shared terms + aligned compare rows)")
