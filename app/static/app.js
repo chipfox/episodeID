@@ -1284,8 +1284,15 @@ async function evidenceDialog(rel, code) {
   const fill = (next) => {
     // Every episode is selectable — including those with no reference, which say
     // so. Hiding them makes a picker switch that "does nothing" look broken.
+    // A subtitle shared by several codes is NAMED by all of them: one dropdown
+    // entry per code, each carrying the whole group, so the switch is visibly a
+    // no-op without any explanatory prose.
+    const titles = {};
+    next.episodes.forEach((e) => { titles[e.code] = e.title || ""; });
+    const refName = (c) => ((next.twin_groups || {})[c] || [c])
+      .map((x) => x + (titles[x] ? " " + titles[x] : "")).join(", ");
     pick.innerHTML = next.episodes
-      .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.code)}${e.title ? " — " + esc(e.title) : ""}${e.has_ref ? "" : " (no reference)"}${e.match ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
+      .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.has_ref ? refName(e.code) : e.code + (e.title ? " " + e.title : "") + " (no reference)")}${e.match ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
     const r = next.reference;
     const m = next.episodes.find((e) => e.code === next.code)?.match;
     $("#ev-ref-meta", box).textContent = r
@@ -1296,14 +1303,11 @@ async function evidenceDialog(rel, code) {
     if (diff && diff.rows.length) {
       // One table, one row per aligned sentence: matched rows share a line,
       // green when the words agree, yellow when they merely say the same thing.
-      // A sticky header names which episode's subtitle you are looking at,
-      // staying visible no matter how far the comparison is scrolled.
-      const tw = next.reference_twins || [];
-      const refLabel = `${next.code}${r.title ? " — " + r.title : ""}` +
-        (tw.length ? ` (shared with ${tw.join(", ")})` : "");
+      // A sticky header names the subtitle by its whole group, staying visible
+      // no matter how far the comparison is scrolled.
       body.className = "ev-diffwrap";
       body.innerHTML = `<div class="difftop"><span>File dialogue · ${esc(evMeta(next.file))}</span>` +
-        `<span>Reference · ${esc(refLabel)}</span></div>` +
+        `<span>Reference · ${esc(refName(next.code))}</span></div>` +
         `<table class="difftab"><tbody>${diff.rows.map((x) =>
         `<tr class="d-${esc(x.kind)}"><td>${esc(x.left)}</td><td>${esc(x.right)}</td></tr>`).join("")}</tbody></table>`;
     } else if (!r && next.file) {
@@ -1318,11 +1322,6 @@ async function evidenceDialog(rel, code) {
     }
     const lines = [];
     const nf = next.file;
-    if ((next.reference_twins || []).length) {
-      lines.push(`<div class="ev-warn"><b>Shared subtitle:</b> ${esc(next.code)} and ` +
-        `${next.reference_twins.map(esc).join(", ")} have the same subtitle text — switching ` +
-        `between them changes nothing.</div>`);
-    }
     if (!r && next.file) {
       lines.push(`<div class="ev-warn"><b>${esc(next.code || "This episode")}</b> has no reference transcript — ` +
         `there is nothing to compare. Fetch references, or upload/paste a transcript in Episodes &amp; references.</div>`);

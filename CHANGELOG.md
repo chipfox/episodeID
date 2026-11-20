@@ -6,14 +6,14 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
-- **The compare dialog explains a reference switch that changes nothing.** S09E19
-  and S09E20 (Beavis) share one OpenSubtitles text filed under both codes: moving
-  the picker between them swapped identical text, which reads as a broken picker.
-  The evidence view now finds references whose bigram overlap passes the same
-  duplicate rule the fetch guard uses and tags them: the diff table's sticky
-  header names the subtitle in view — *"Reference · S09E19 — Blackout!
-  (shared with S09E20)"* — so switching codes is visible without scrolling up,
-  and a shared subtitle is identified rather than explained in prose. Episodes
+- **A shared subtitle is named by every code it covers.** S09E19 and S09E20
+  (Beavis) share one OpenSubtitles text filed under both codes: moving the picker
+  between them swapped identical text, which reads as a broken picker. `twin_groups`
+  groups references whose bigram overlap passes the same duplicate rule the fetch
+  guard uses, and the group **is** the subtitle's name — the dropdown entry and the
+  diff table's sticky header both read *"Reference · S09E19 School Test, S09E20
+  Snitchers"* no matter which member is selected, so switching is visibly a no-op
+  with no explanatory banner. Episodes
   with **no** reference are no longer hidden from the picker — they show
   "(no reference)" and selecting one says so in a banner over the file's
   full-width dialogue. The dialog also shows where in the file the scan matched

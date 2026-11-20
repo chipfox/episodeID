@@ -224,6 +224,46 @@ def reference_grams(tvdb_id: int) -> tuple[dict[str, dict], dict[str, set]]:
     return refs, grams
 
 
+_twins_cache: dict[int, tuple] = {}
+
+
+def twin_groups(tvdb_id: int) -> dict[str, list[str]]:
+    """Codes that share one subtitle text: {code: [every code in its group]}.
+
+    Beavis/Gumball-style double episodes get ONE OpenSubtitles text filed under
+    two codes, so the picker and the compare header name the subtitle by its
+    whole group ("S09E19 School Test, S09E20 Snitchers") and switching between
+    members is visibly a no-op. Membership uses the fetch guard's own duplicate
+    rule so the UI never disagrees with what a fetch would refuse. Cached like
+    reference_grams, keyed by the same per-file version stamps.
+    """
+    refs, grams = reference_grams(tvdb_id)
+    key = tuple(sorted((c, str((e or {}).get("_v") or "")) for c, e in refs.items()))
+    hit = _twins_cache.get(tvdb_id)
+    if hit and hit[0] == key:
+        return hit[1]
+    codes = sorted(c for c, g in grams.items() if len(g) >= DUP_MIN_BIGRAMS)
+    parent = {c: c for c in codes}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i, a in enumerate(codes):
+        for b in codes[i + 1:]:
+            if textsim.overlap(grams[a], grams[b]) >= DUPLICATE_REFERENCE_SIMILARITY:
+                parent[find(a)] = find(b)
+    members: dict[str, list[str]] = {}
+    for c in codes:
+        members.setdefault(find(c), []).append(c)
+    groups = {c: g for g in members.values() if len(g) > 1 for c in g}
+    with _grams_lock:
+        _twins_cache[tvdb_id] = (key, groups)
+    return groups
+
+
 def warm_reference_cache() -> None:
     """Read every series' references once at startup so the first page load is fast."""
     root = CACHE_DIR / "refs"

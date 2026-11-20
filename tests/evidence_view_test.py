@@ -239,6 +239,12 @@ assert t1["reference_twins"] == ["S01E06"], t1["reference_twins"]
 t2 = c.get(f"/api/series/{sid}/evidence", params={"code": "S01E06"}).json()
 assert t2["file"] is None and t2["reference_twins"] == ["S01E05"], t2["reference_twins"]
 assert da["reference_twins"] == []  # short crafted texts sit under the overlap floor
+# The subtitle is NAMED by its whole group, not explained: every member maps to
+# the full list so the dropdown entry and the compare header both read
+# "S01E05 …, S01E06 …" no matter which one is selected.
+assert t1["twin_groups"]["S01E05"] == ["S01E05", "S01E06"], t1["twin_groups"]
+assert t1["twin_groups"]["S01E06"] == ["S01E05", "S01E06"], t1["twin_groups"]
+assert "S01E03" not in t1["twin_groups"]  # a lone reference names only itself
 # Episodes without a reference stay in the episode list so the picker can say so.
 assert [e for e in t1["episodes"] if e["code"] == "S01E04"][0]["has_ref"] is False
 

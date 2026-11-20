@@ -17,8 +17,8 @@ from . import integrity, pipeline, redownload  # noqa: F401  (registers job hand
 from . import summary as summary_match
 from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, language_choices,
                      public_settings, safe_media_path, save_settings)
-from .references import (DUPLICATE_REFERENCE_SIMILARITY, DUP_MIN_BIGRAMS, OpenSubtitles,
-                         clear_reference, ep_code, load_refs, manual_dir, reference_grams)
+from .references import (OpenSubtitles, clear_reference, ep_code, load_refs, manual_dir,
+                         reference_grams, twin_groups)
 from .views import best_dialogue, episode_match, series_out
 from .media_text import VIDEO_EXTS
 
@@ -752,15 +752,10 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
     matches = episode_match(series)
     contains, shared, ranked, diff = None, [], [], None
     # Two codes filed under the same text (the usual Beavis/Gumball double-episode
-    # footprint): switching between them cannot change anything, and a viewer who
-    # isn't told assumes the picker broke. Same overlap rule the fetch guard uses.
-    twins: list[str] = []
-    if ref_text:
-        qg = ref_grams.get(chosen) or textsim.bigrams(ref_text)
-        if len(qg) >= DUP_MIN_BIGRAMS:
-            twins = [c for c, g in sorted(ref_grams.items())
-                     if c != chosen and len(g) >= DUP_MIN_BIGRAMS
-                     and textsim.overlap(qg, g) >= DUPLICATE_REFERENCE_SIMILARITY][:8]
+    # footprint): the subtitle's name IS its whole group, so the picker option and
+    # the compare header both show every code that shares this exact text.
+    groups = twin_groups(series["tvdb_id"])
+    twins = [c for c in groups.get(chosen, []) if c != chosen]
     if file_out and file_out["text"] and refs:
         query = textsim.bigrams(file_out["text"])
         file_out["bigrams"] = len(query)
@@ -792,6 +787,7 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
         "ranked": ranked,
         "diff": diff,
         "reference_twins": twins,
+        "twin_groups": groups,
     }
 
 
