@@ -6,6 +6,19 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **The compare dialog explains a reference switch that changes nothing.** S09E19
+  and S09E20 (Beavis) share one OpenSubtitles text filed under both codes: moving
+  the picker between them swapped identical text, which reads as a broken picker.
+  The evidence view now finds references whose bigram overlap passes the same
+  duplicate rule the fetch guard uses and banners *"the text filed under S09E19 is
+  the same text filed under S09E20 — the switch changes nothing, and neither can
+  prove which of those episodes this file read."* Episodes with **no** reference
+  are no longer hidden from the picker — they show "(no reference)" and selecting
+  one says so in a banner over the file's full-width dialogue. The dialog also
+  shows where in the file the scan matched (per-segment `start–end → CODE` badges
+  carrying the matcher's own *why* on hover) and a file-vs-reference word count,
+  which notes when one side holds ~1.6× or more of the other's dialogue — the
+  double-length-reference and two-in-one-file cases the Snitchers review hit.
 - **Evidence over an unknown filename number is now applicable** (`PLAN_VERSION` 23).
   A file named for an episode the loaded TVDB list doesn't have (Beavis S01E04, where
   season 1 ends at S01E03) used to be a permanent dead-end review — "reload the

@@ -153,6 +153,9 @@ form.settings legend { font-weight: 600; padding: 0 6px; }
 .difftab tr.d-near td { background: color-mix(in srgb, var(--warn) 18%, transparent); }
 .difftab tr.d-file td:last-child, .difftab tr.d-ref td:first-child {
   background: var(--panel-2); }
+.ev-warn { padding: 6px 10px; border-radius: 6px; font-size: 12px;
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); }
 .ev-legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; color: var(--muted); }
 .ev-legend .lg { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 .ev-legend .lg-same { background: color-mix(in srgb, var(--ok) 35%, transparent); border: 1px solid var(--ok); }

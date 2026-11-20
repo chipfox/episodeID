@@ -1282,8 +1282,10 @@ async function evidenceDialog(rel, code) {
   };
   const pick = $("#ev-pick", box);
   const fill = (next) => {
-    pick.innerHTML = next.episodes.filter((e) => e.has_ref || e.code === next.code)
-      .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.code)}${e.title ? " — " + esc(e.title) : ""}${e.match ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
+    // Every episode is selectable — including those with no reference, which say
+    // so. Hiding them makes a picker switch that "does nothing" look broken.
+    pick.innerHTML = next.episodes
+      .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.code)}${e.title ? " — " + esc(e.title) : ""}${e.has_ref ? "" : " (no reference)"}${e.match ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
     const r = next.reference;
     const m = next.episodes.find((e) => e.code === next.code)?.match;
     $("#ev-ref-meta", box).textContent = r
@@ -1297,14 +1299,28 @@ async function evidenceDialog(rel, code) {
       body.className = "ev-diffwrap";
       body.innerHTML = `<table class="difftab"><tbody>${diff.rows.map((x) =>
         `<tr class="d-${esc(x.kind)}"><td>${esc(x.left)}</td><td>${esc(x.right)}</td></tr>`).join("")}</tbody></table>`;
+    } else if (!r && next.file) {
+      // Nothing to align against: give the file's dialogue the full width and
+      // let the banner below say why there is no comparison.
+      body.className = "";
+      body.innerHTML = `<pre class="ev-text">${esc(next.file.text || "(no transcript was read for this file)")}</pre>`;
     } else {
-      // No alignment without both texts: fall back to two plain columns.
       body.className = "ev-grid";
       body.innerHTML = `<div class="ev-col"><pre class="ev-text">${esc(next.file.text || "(no transcript was read for this file)")}</pre></div>` +
         `<div class="ev-col"><pre class="ev-text">${esc(r ? r.text : "No reference for this episode — fetch references, or upload/paste a transcript in Episodes & references.")}</pre></div>`;
     }
     const lines = [];
     const nf = next.file;
+    if ((next.reference_twins || []).length) {
+      lines.push(`<div class="ev-warn"><b>Identical references:</b> the text filed under ${esc(next.code)} ` +
+        `is the same text filed under ${next.reference_twins.map(esc).join(", ")} — the switch changes nothing, ` +
+        `and neither reference can prove which of those episodes this file read.` +
+        `${nf.segments && nf.segments.length > 1 ? " The segments below show the file covering more than one of them." : ""}</div>`);
+    }
+    if (!r && next.file) {
+      lines.push(`<div class="ev-warn"><b>${esc(next.code || "This episode")}</b> has no reference transcript — ` +
+        `there is nothing to compare. Fetch references, or upload/paste a transcript in Episodes &amp; references.</div>`);
+    }
     if (next.containment != null) {
       // Measured on this library: an episode's own reference contains 0.70-0.94 of a
       // file's word pairs; the closest unrelated reference contains 0.18.
@@ -1323,6 +1339,22 @@ async function evidenceDialog(rel, code) {
         `<span class="lg lg-near"></span>${c.near} say the same thing differently · ` +
         `<span class="lg lg-one"></span>${c.file} only in the file · ${c.ref} only in the reference` +
         `${diff.truncated ? " · list truncated" : ""}</div>`);
+    }
+    if (nf.segments && nf.segments.length) {
+      lines.push(`<div class="wrap-row">where the scan matched in this file: ${nf.segments.map((s) =>
+        `<span class="badge ${s.confidence === "high" ? "b-ok" : s.confidence === "low" ? "b-warn" : "b-info"}" ` +
+        `title="${esc(s.why || `score ${s.score}${s.margin != null ? `, margin ${s.margin}` : ""}`)}">` +
+        `${fmtTime(s.start)}–${fmtTime(s.end)} → ${esc(s.code)} · ${esc(s.confidence || "?")}</span>`).join(" ")}</div>`);
+    }
+    if (r && nf.words) {
+      const ratio = r.words / nf.words;
+      let note = "";
+      if (nf.scope === "full" && ratio >= 1.6)
+        note = ` — this reference holds ~${ratio.toFixed(1)}× the file's dialogue: a double-length ` +
+          `reference can cover two episodes, so half of it matching need not mean a half-transcribed file`;
+      else if (nf.scope === "full" && ratio <= 0.62)
+        note = ` — the file holds ~${(1 / ratio).toFixed(1)}× this reference's dialogue: it may carry more than one episode`;
+      lines.push(`<span class="muted small">${nf.words} file words · ${r.words} reference words${esc(note)}</span>`);
     }
     if (next.shared.length) {
       lines.push(`<div class="wrap-row">shared: ${next.shared.map((w) => `<span class="badge">${esc(w)}</span>`).join(" ")}</div>`);

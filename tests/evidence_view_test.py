@@ -185,6 +185,8 @@ db.update_series(sid, episodes=[
     {"season": 1, "episode": 2, "title": "The Lighthouse", "aired": "2020-01-08"},
     {"season": 1, "episode": 3, "title": "Radio", "aired": "2020-01-15"},
     {"season": 1, "episode": 4, "title": "Silent", "aired": "2020-01-22"},
+    {"season": 1, "episode": 5, "title": "Twin A", "aired": "2020-01-29"},
+    {"season": 1, "episode": 6, "title": "Twin B", "aired": "2020-02-05"},
 ])
 save_ref("S01E03", "Alpha bravo charlie delta? Echo foxtrot golf hotel india "
                    "juliett! Victor whiskey xray. Kilo lima Mike november oscar "
@@ -223,5 +225,21 @@ assert merged["counts"] == {"same": 0, "near": 1, "file": 0, "ref": 0}, merged["
 # shared words below the floor stay on their own sides.
 greet = align("Hey Butt-Head what is wrong with television", "Hey Butt-Head let us breathe gas")
 assert greet["counts"]["near"] == 0, greet["counts"]
+
+# One text filed under two codes (the double-episode OpenSubtitles footprint):
+# switching between them changes nothing, so the view must name the twins rather
+# than let the reader think the picker broke. Same rule the fetch guard uses:
+# bigram overlap past the threshold, texts long enough to judge.
+big = transcript(600, ("titanic", "ferry"), 31)
+save_ref("S01E05", big)
+save_ref("S01E06", big)
+t1 = c.get(f"/api/series/{sid}/evidence",
+           params={"rel": "Season 1/Show - S01E03 - Radio.mkv", "code": "S01E05"}).json()
+assert t1["reference_twins"] == ["S01E06"], t1["reference_twins"]
+t2 = c.get(f"/api/series/{sid}/evidence", params={"code": "S01E06"}).json()
+assert t2["file"] is None and t2["reference_twins"] == ["S01E05"], t2["reference_twins"]
+assert da["reference_twins"] == []  # short crafted texts sit under the overlap floor
+# Episodes without a reference stay in the episode list so the picker can say so.
+assert [e for e in t1["episodes"] if e["code"] == "S01E04"][0]["has_ref"] is False
 
 print("PASS (evidence view + shared terms + aligned compare rows)")
