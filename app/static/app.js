@@ -1296,8 +1296,15 @@ async function evidenceDialog(rel, code) {
     if (diff && diff.rows.length) {
       // One table, one row per aligned sentence: matched rows share a line,
       // green when the words agree, yellow when they merely say the same thing.
+      // A sticky header names which episode's subtitle you are looking at,
+      // staying visible no matter how far the comparison is scrolled.
+      const tw = next.reference_twins || [];
+      const refLabel = `${next.code}${r.title ? " — " + r.title : ""}` +
+        (tw.length ? ` (shared with ${tw.join(", ")})` : "");
       body.className = "ev-diffwrap";
-      body.innerHTML = `<table class="difftab"><tbody>${diff.rows.map((x) =>
+      body.innerHTML = `<table class="difftab"><thead><tr>` +
+        `<th>File dialogue · ${esc(evMeta(next.file))}</th>` +
+        `<th>Reference · ${esc(refLabel)}</th></tr></thead><tbody>${diff.rows.map((x) =>
         `<tr class="d-${esc(x.kind)}"><td>${esc(x.left)}</td><td>${esc(x.right)}</td></tr>`).join("")}</tbody></table>`;
     } else if (!r && next.file) {
       // Nothing to align against: give the file's dialogue the full width and
@@ -1312,10 +1319,9 @@ async function evidenceDialog(rel, code) {
     const lines = [];
     const nf = next.file;
     if ((next.reference_twins || []).length) {
-      lines.push(`<div class="ev-warn"><b>Identical references:</b> the text filed under ${esc(next.code)} ` +
-        `is the same text filed under ${next.reference_twins.map(esc).join(", ")} — the switch changes nothing, ` +
-        `and neither reference can prove which of those episodes this file read.` +
-        `${nf.segments && nf.segments.length > 1 ? " The segments below show the file covering more than one of them." : ""}</div>`);
+      lines.push(`<div class="ev-warn"><b>Shared subtitle:</b> ${esc(next.code)} and ` +
+        `${next.reference_twins.map(esc).join(", ")} have the same subtitle text — switching ` +
+        `between them changes nothing.</div>`);
     }
     if (!r && next.file) {
       lines.push(`<div class="ev-warn"><b>${esc(next.code || "This episode")}</b> has no reference transcript — ` +
@@ -1349,14 +1355,7 @@ async function evidenceDialog(rel, code) {
         `${fmtTime(s.start)}–${fmtTime(s.end)} → ${esc(s.code)} · ${esc(s.confidence || "?")}</span>`).join(" ")}</div>`);
     }
     if (r && nf.words) {
-      const ratio = r.words / nf.words;
-      let note = "";
-      if (nf.scope === "full" && ratio >= 1.6)
-        note = ` — this reference holds ~${ratio.toFixed(1)}× the file's dialogue: a double-length ` +
-          `reference can cover two episodes, so half of it matching need not mean a half-transcribed file`;
-      else if (nf.scope === "full" && ratio <= 0.62)
-        note = ` — the file holds ~${(1 / ratio).toFixed(1)}× this reference's dialogue: it may carry more than one episode`;
-      lines.push(`<span class="muted small">${nf.words} file words · ${r.words} reference words${esc(note)}</span>`);
+      lines.push(`<span class="muted small">${nf.words} file words · ${r.words} reference words</span>`);
     }
     if (next.shared.length) {
       lines.push(`<div class="wrap-row">shared: ${next.shared.map((w) => `<span class="badge">${esc(w)}</span>`).join(" ")}</div>`);
