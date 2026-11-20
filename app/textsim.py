@@ -133,12 +133,14 @@ def overlap(a_grams: set[tuple[str, str]], b_grams: set[tuple[str, str]]) -> flo
 # carrying the same line (a speech-to-text read rarely matches subtitle
 # punctuation word for word); a blank side = the sentence appears only there.
 # The thresholds keep near from pairing two exclamations that merely share a
-# "yeah": a pair must agree on several distinct content words, in order.
+# "yeah": a pair must agree in content (the Jaccard floor), in order.
 
 NEAR_SIMILARITY = 0.4   # Jaccard of content words needed to call a pair the same line
-NEAR_SHARED = 2         # ... and how many distinct shared content words that takes
-                        # (two exclamations merely sharing a "yeah" stay unpaired:
-                        # the Jaccard floor still rejects them)
+NEAR_SHARED = 1         # ... and the minimum shared words it takes. One is enough
+                        # only via containment — one side wholly inside a side at
+                        # least twice as long ("Then it would rule." inside
+                        # "Yeah, then it would rule!") — so the Jaccard floor,
+                        # not the word count, is what rejects catchphrase pairs.
 MAX_DIFF_ROWS = 4000    # a transcript this long in sentences is past readable anyway
 _MAX_PAIR_CELLS = 120_000  # DP budget for pairing one changed block
 

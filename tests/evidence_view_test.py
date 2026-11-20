@@ -225,9 +225,6 @@ assert merged["counts"] == {"same": 0, "near": 1, "file": 0, "ref": 0}, merged["
 # shared words that fail the Jaccard floor stay on their own sides.
 greet = align("Hey Butt-Head what is wrong with television", "Hey Butt-Head let us breathe gas")
 assert greet["counts"]["near"] == 0, greet["counts"]
-# Same guard for short lines that share two words but live in different worlds.
-worlds = align("Taco bell is closed sunday", "Taco revenge on tuesday")
-assert worlds["counts"]["near"] == 0, worlds["counts"]
 
 # Smart quotes must not split a line: an ASR's straight apostrophe and a
 # subtitle's curly one are the SAME sentence (a curly ’ used to tokenize as a
@@ -238,8 +235,17 @@ assert curly["counts"] == {"same": 2, "near": 0, "file": 0, "ref": 0}, curly["co
 # A reference typo (I'‘m) still matches the ASR's clean I’m.
 typo = align("Hey, I\u2018m going somewhere else.", "Hey, I'\u2018m going somewhere else.")
 assert typo["counts"]["same"] == 1, typo["counts"]
-# Two content words are enough to pair a short line with the run-on sentence
-# that swallowed it (taco supreme): granularity over the shared-words floor.
+# One shared word pairs a short line with the run-on sentence that swallowed
+# it, but only through containment: one side wholly inside a side at least
+# twice as long. "Then it would rule." has one content word (`rule`; `would`
+# is a stopword), and the Tornado case is all such sentence-boundary drift.
+rule = align("Then it would rule.\n- Hey, I'm one big queen",
+             "Yeah, then it would rule!")
+assert [(r["kind"], r["left"]) for r in rule["rows"] if r["left"]] == [
+    ("near", "Then it would rule."), ("file", "- Hey, I'm one big queen")], rule["rows"]
+# ... and the same-word-two-worlds guard is exactly that guard failing containment.
+worlds = align("Taco bell is closed sunday", "Taco revenge on tuesday")
+assert worlds["counts"]["near"] == 0, worlds["counts"]
 taco = align("Uh, taco supreme!\nGet out-- Now! Ahh! Whoa!",
              "Uhh, taco supreme! GET OUT!! NOW!! Whoa!")
 assert taco["counts"]["near"] == 1 and taco["counts"]["same"] == 0, taco["counts"]
