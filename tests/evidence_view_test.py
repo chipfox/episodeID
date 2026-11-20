@@ -222,9 +222,27 @@ merged = align("Robert Urich Melissa Gilbert Lou Ferrigno return to Asbestos in 
                "Melissa Gilbert in Asbestos in Obstetrics")
 assert merged["counts"] == {"same": 0, "near": 1, "file": 0, "ref": 0}, merged["counts"]
 # Two lines that merely open with the same catchphrase never pair on containment:
-# shared words below the floor stay on their own sides.
+# shared words that fail the Jaccard floor stay on their own sides.
 greet = align("Hey Butt-Head what is wrong with television", "Hey Butt-Head let us breathe gas")
 assert greet["counts"]["near"] == 0, greet["counts"]
+# Same guard for short lines that share two words but live in different worlds.
+worlds = align("Taco bell is closed sunday", "Taco revenge on tuesday")
+assert worlds["counts"]["near"] == 0, worlds["counts"]
+
+# Smart quotes must not split a line: an ASR's straight apostrophe and a
+# subtitle's curly one are the SAME sentence (a curly ’ used to tokenize as a
+# broken word on the subtitle side, leaving the pair unpaired).
+curly = align("YEAH, BUT THAT'S BESIDES THE POINT. YOU'RE SUCH A DUMMY, MAX.",
+              "YEAH, BUT THAT\u2019S BESIDES THE POINT. YOU\u2019RE SUCH A DUMMY, MAX.")
+assert curly["counts"] == {"same": 2, "near": 0, "file": 0, "ref": 0}, curly["counts"]
+# A reference typo (I'‘m) still matches the ASR's clean I’m.
+typo = align("Hey, I\u2018m going somewhere else.", "Hey, I'\u2018m going somewhere else.")
+assert typo["counts"]["same"] == 1, typo["counts"]
+# Two content words are enough to pair a short line with the run-on sentence
+# that swallowed it (taco supreme): granularity over the shared-words floor.
+taco = align("Uh, taco supreme!\nGet out-- Now! Ahh! Whoa!",
+             "Uhh, taco supreme! GET OUT!! NOW!! Whoa!")
+assert taco["counts"]["near"] == 1 and taco["counts"]["same"] == 0, taco["counts"]
 
 # One text filed under two codes (the double-episode OpenSubtitles footprint):
 # switching between them changes nothing, so the view must name the twins rather

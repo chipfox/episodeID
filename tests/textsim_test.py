@@ -13,6 +13,10 @@ b = ("Mulder, I have cancer. Statistically there is about zero chance of surviva
 other = "The Knicks won in overtime last night at the garden after a wild finish."
 
 assert abs(textsim.similarity(a, a) - 1.0) < 1e-9, textsim.similarity(a, a)
+# Punctuation view: smart quotes and typo'd double apostrophes fold to one word.
+assert textsim.norm("DON\u2019T") == "don't" and textsim.norm("I'\u2018m") == "i'm"
+assert textsim.bigrams("you don\u2019t worry") == textsim.bigrams("you don't worry")
+assert abs(textsim.similarity("don\u2019t", "don't") - 1.0) < 1e-9
 assert abs(textsim.similarity(a, b) - textsim.similarity(b, a)) < 1e-12
 assert textsim.similarity(a, other) < 0.2, textsim.similarity(a, other)
 

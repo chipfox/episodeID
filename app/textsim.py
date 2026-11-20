@@ -18,6 +18,26 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sklearn.preprocessing import normalize
 
 
+_QUOTE = str.maketrans({"’": "'", "‘": "'", "‛": "'", "ʼ": "'", "`": "'",
+                        "´": "'", "′": "'", "“": '"', "”": '"',
+                        "–": "-", "—": "-"})
+
+
+def norm(text: str) -> str:
+    """The one punctuation view every comparison in the app shares.
+
+    Smart apostrophes are the killer: every tokenizer here matches words as
+    [a-z][a-z']+, so a subtitle's DON’T tokenizes as "don" while an ASR's
+    DON'T is "don't" — the same line scores as two different ones, in the
+    matcher, the duplicate guard and the compare diff alike. A reference typo
+    like I'‘m splits "I'm" the same way. Unify quotes, fold repeated
+    apostrophes, lowercase, collapse whitespace.
+    """
+    t = (text or "").lower().translate(_QUOTE)
+    t = re.sub(r"'{2,}", "'", t)
+    return re.sub(r"\s+", " ", t)
+
+
 def vectorizer(n_docs: int) -> TfidfVectorizer:
     return TfidfVectorizer(lowercase=True, strip_accents="unicode", sublinear_tf=True,
                            stop_words="english",
@@ -27,7 +47,7 @@ def vectorizer(n_docs: int) -> TfidfVectorizer:
 
 def matrix(docs: list[str]):
     """Normalised TF-IDF rows, so a dot product is a cosine."""
-    return normalize(vectorizer(len(docs)).fit_transform([d or "" for d in docs]))
+    return normalize(vectorizer(len(docs)).fit_transform([norm(d) for d in docs]))
 
 
 def similarity(a: str, b: str) -> float:
@@ -63,8 +83,8 @@ def shared_terms(a: str, b: str, limit: int = 14) -> list[str]:
     reference — names and places are what settle a match — not a score. Stop
     words and words shorter than four letters are ignored.
     """
-    ca = Counter(w for w in _WORD.findall((a or "").lower()) if w not in ENGLISH_STOP_WORDS)
-    cb = Counter(w for w in _WORD.findall((b or "").lower()) if w not in ENGLISH_STOP_WORDS)
+    ca = Counter(w for w in _WORD.findall(norm(a)) if w not in ENGLISH_STOP_WORDS)
+    cb = Counter(w for w in _WORD.findall(norm(b)) if w not in ENGLISH_STOP_WORDS)
     both = [(min(ca[w], cb[w]), ca[w] + cb[w], w) for w in ca.keys() & cb.keys()]
     both.sort(key=lambda t: (-t[0], -t[1], t[2]))
     return [w for _low, _total, w in both[:limit]]
@@ -82,7 +102,7 @@ BIGRAM_FLOOR = 40  # fewer word pairs than this and a text is too short to judge
 
 def bigrams(text: str) -> set[tuple[str, str]]:
     """The word pairs of a transcript, lowercased."""
-    words = re.findall(r"[a-z][a-z']+", (text or "").lower())
+    words = re.findall(r"[a-z][a-z']+", norm(text))
     return set(zip(words, words[1:]))
 
 
@@ -116,7 +136,9 @@ def overlap(a_grams: set[tuple[str, str]], b_grams: set[tuple[str, str]]) -> flo
 # "yeah": a pair must agree on several distinct content words, in order.
 
 NEAR_SIMILARITY = 0.4   # Jaccard of content words needed to call a pair the same line
-NEAR_SHARED = 3         # ... and how many distinct shared content words that takes
+NEAR_SHARED = 2         # ... and how many distinct shared content words that takes
+                        # (two exclamations merely sharing a "yeah" stay unpaired:
+                        # the Jaccard floor still rejects them)
 MAX_DIFF_ROWS = 4000    # a transcript this long in sentences is past readable anyway
 _MAX_PAIR_CELLS = 120_000  # DP budget for pairing one changed block
 
@@ -149,11 +171,11 @@ def chunks(text: str) -> list[str]:
 
 
 def _norm(chunk: str) -> str:
-    return " ".join(_KW_WORD.findall(chunk.lower()))
+    return " ".join(_KW_WORD.findall(norm(chunk)))
 
 
 def _keywords(chunk: str) -> frozenset:
-    return frozenset(w for w in _KW_WORD.findall(chunk.lower())
+    return frozenset(w for w in _KW_WORD.findall(norm(chunk))
                      if len(w) > 2 and w not in ENGLISH_STOP_WORDS)
 
 

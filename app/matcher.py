@@ -67,6 +67,7 @@ class Matcher:
         self.s = settings
         docs = [refs[c] for c in self.codes] + [t for t in background or [] if t.strip()]
         self.vec = TfidfVectorizer(
+            preprocessor=textsim.norm,
             lowercase=True, strip_accents="unicode", sublinear_tf=True,
             ngram_range=(1, 2), min_df=1, max_df=0.6 if len(docs) >= 10 else 1.0,
             token_pattern=r"(?u)\b[a-zA-Z][a-zA-Z']+\b", stop_words="english")
