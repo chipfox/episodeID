@@ -935,7 +935,7 @@ function coverageHtml(plan, series) {
       ${c.gained.length ? ` <span class="badge b-ok">${c.gained.length} gained</span>` : ""}
       ${c.missing.length ? ` <span class="badge">${c.missing.length} missing</span>` : ""}
       ${c.doubled.length ? ` <span class="badge b-warn">${c.doubled.length} doubled</span>` : ""}</summary>
-    <div class="muted small" style="margin-top:6px">Worked out from the ticked changes — tick or untick rows to see the effect.
+    <div class="muted small" style="margin-top:6px">Preview of the ticked rows — tick or untick to update.
       Episodes that haven't aired yet${(series.options || {}).include_specials ? "" : " and specials"} aren't counted.</div>
     ${sec("b-bad", "Lost by this plan", c.lost, "have a file now but won't after applying — check these")}
     ${sec("b-ok", "Gained", c.gained)}
@@ -1066,7 +1066,7 @@ async function redownloadDialog(tab, cached, refresh = false) {
           ${last.reason ? `<div style="color:var(--bad)">${esc(shortReason(last.reason))}</div>` : ""}
           ${r.status === "waiting" ? progressHtml(((r.grabs || []).filter((x) => x.status === "waiting").pop() || {}).progress) : ""}
           ${last.auto_import && last.auto_import.note ? `<div class="${last.auto_import.sent ? "muted" : ""}" style="${last.auto_import.sent ? "" : "color:var(--warn)"}">${esc(last.auto_import.note)}</div>` : ""}
-          ${r.status === "waiting" && r.auto_retry ? `<div class="muted">tries the next release with the title if this fails (${tries} of 5 tried)</div>` : ""}
+          ${r.status === "waiting" && r.auto_retry ? `<div class="muted">retries the next release for this title (${tries}/5)</div>` : ""}
           ${r.restore_note ? `<div class="muted">${esc(r.restore_note)}</div>` : ""}
           ${tries > 1 ? `<details data-k="att|${esc(rels[0])}"><summary class="muted" style="cursor:pointer">${tries} attempts</summary>${(r.grabs || []).map((g) => `<div class="muted mono" style="word-break:break-all;margin-left:12px">• ${esc(g.title)}${g.reason ? ` — <span style="color:var(--bad);font-family:inherit">${esc(shortReason(g.reason))}</span>` : g.status === "imported" ? " — ✓" : ""}</div>`).join("")}</details>` : ""}
         </div>
@@ -1266,7 +1266,7 @@ async function evidenceDialog(rel, code) {
     <div class="ev-grid">
       <div class="ev-col"><div class="ev-head"><b>File dialogue</b>
         <span class="muted small">${esc(evMeta(f))}</span></div>
-        <div class="muted small ev-src" title="${esc(f.source)}">${esc(f.source)}${sampled ? " · the verdict used a sample" : ""}</div></div>
+        <div class="muted small ev-src" title="${esc(f.source)}">${esc(f.source)}${sampled ? " · verdict used sample" : ""}</div></div>
       <div class="ev-col"><div class="ev-head"><b>Reference</b>
         <select id="ev-pick"></select></div>
         <div class="muted small ev-src" id="ev-ref-meta"></div></div>
@@ -1318,43 +1318,38 @@ async function evidenceDialog(rel, code) {
     } else {
       body.className = "ev-grid";
       body.innerHTML = `<div class="ev-col"><pre class="ev-text">${esc(next.file.text || "(no transcript was read for this file)")}</pre></div>` +
-        `<div class="ev-col"><pre class="ev-text">${esc(r ? r.text : "No reference for this episode — fetch references, or upload/paste a transcript in Episodes & references.")}</pre></div>`;
+        `<div class="ev-col"><pre class="ev-text">${esc(r ? r.text : "(no reference)")}</pre></div>`;
     }
     const lines = [];
     const nf = next.file;
     if (!r && next.file) {
       lines.push(`<div class="ev-warn"><b>${esc(next.code || "This episode")}</b> has no reference transcript — ` +
-        `there is nothing to compare. Fetch references, or upload/paste a transcript in Episodes &amp; references.</div>`);
+        `nothing to compare. Fetch or paste one in Episodes &amp; references.</div>`);
     }
     if (next.containment != null) {
       // Measured on this library: an episode's own reference contains 0.70-0.94 of a
       // file's word pairs; the closest unrelated reference contains 0.18.
       const cls = next.containment >= 0.6 ? "b-ok" : next.containment >= 0.35 ? "b-warn" : "b-bad";
-      const side = nf.scope === "full" ? "whole file" : nf.scope === "sample" ? "sample" : "excerpt";
       lines.push(`<div><span class="badge ${cls}">${(next.containment * 100).toFixed(1)}%</span> ` +
-        `of the ${side}'s word pairs appear in this reference` +
-        `<span class="muted small"> — ${nf.bigrams} pairs${r ? `, ${r.words}-word reference` : ""}</span></div>`);
+        `word-pair match <span class="muted small">· ${nf.bigrams} file pairs</span></div>`);
     } else if (nf.words && r) {
-      // Only say "too little dialogue" when a reference was actually there to
-      // compare against; without one, the banner above already says why.
-      lines.push(`<div class="muted">Too little dialogue to compare — ${nf.bigrams || 0} word pairs, ` +
-        `${next.bigram_floor} needed.</div>`);
+      // Only say "too little" when a reference was actually there to compare
+      // against; without one, the banner above already says why.
+      lines.push(`<div class="muted">too little dialogue to score — ${nf.bigrams || 0} of ` +
+        `${next.bigram_floor} word pairs</div>`);
     }
     if (diff && diff.rows.length) {
       const c = diff.counts;
-      lines.push(`<div class="ev-legend"><span class="lg lg-same"></span>${c.same} in both · ` +
-        `<span class="lg lg-near"></span>${c.near} say the same thing differently · ` +
-        `<span class="lg lg-one"></span>${c.file} only in the file · ${c.ref} only in the reference` +
-        `${diff.truncated ? " · list truncated" : ""}</div>`);
+      lines.push(`<div class="ev-legend"><span class="lg lg-same"></span>${c.same} exact · ` +
+        `<span class="lg lg-near"></span>${c.near} similar · ` +
+        `<span class="lg lg-one"></span>${c.file} file only · ${c.ref} reference only` +
+        `${diff.truncated ? " · truncated" : ""}</div>`);
     }
     if (nf.segments && nf.segments.length) {
-      lines.push(`<div class="wrap-row">where the scan matched in this file: ${nf.segments.map((s) =>
+      lines.push(`<div class="wrap-row">scan matches: ${nf.segments.map((s) =>
         `<span class="badge ${s.confidence === "high" ? "b-ok" : s.confidence === "low" ? "b-warn" : "b-info"}" ` +
         `title="${esc(s.why || `score ${s.score}${s.margin != null ? `, margin ${s.margin}` : ""}`)}">` +
         `${fmtTime(s.start)}–${fmtTime(s.end)} → ${esc(s.code)} · ${esc(s.confidence || "?")}</span>`).join(" ")}</div>`);
-    }
-    if (r && nf.words) {
-      lines.push(`<span class="muted small">${nf.words} file words · ${r.words} reference words</span>`);
     }
     if (next.shared.length) {
       lines.push(`<div class="wrap-row">shared: ${next.shared.map((w) => `<span class="badge">${esc(w)}</span>`).join(" ")}</div>`);
