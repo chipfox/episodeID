@@ -1302,9 +1302,9 @@ async function evidenceDialog(rel, code) {
       const refLabel = `${next.code}${r.title ? " — " + r.title : ""}` +
         (tw.length ? ` (shared with ${tw.join(", ")})` : "");
       body.className = "ev-diffwrap";
-      body.innerHTML = `<table class="difftab"><thead><tr>` +
-        `<th>File dialogue · ${esc(evMeta(next.file))}</th>` +
-        `<th>Reference · ${esc(refLabel)}</th></tr></thead><tbody>${diff.rows.map((x) =>
+      body.innerHTML = `<div class="difftop"><span>File dialogue · ${esc(evMeta(next.file))}</span>` +
+        `<span>Reference · ${esc(refLabel)}</span></div>` +
+        `<table class="difftab"><tbody>${diff.rows.map((x) =>
         `<tr class="d-${esc(x.kind)}"><td>${esc(x.left)}</td><td>${esc(x.right)}</td></tr>`).join("")}</tbody></table>`;
     } else if (!r && next.file) {
       // Nothing to align against: give the file's dialogue the full width and
