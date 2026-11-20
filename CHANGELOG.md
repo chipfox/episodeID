@@ -6,6 +6,19 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **One punctuation view for every comparison.** Smart apostrophes (`’ ‘ ` ´`)
+  tokenized as word-breakers everywhere — a subtitle's `DON’T` scored as "don"
+  against an ASR's `DON'T` — so visually identical diff lines paired as nothing
+  and word matching silently deflated in the matcher, duplicate guard and shared
+  terms alike. `textsim.norm()` folds quotes to `'`, collapses typo'd doubles
+  (`I'‘m` → `I'm`), lowercases; every tokenizer, the diff's same/keyword views
+  and the matcher's TF-IDF vectorizer now share it. `NEAR_SHARED` 3→2 pairs a
+  short line with the run-on sentence that swallowed it, the Jaccard floor
+  keeping catchphrase-only pairs out (`textsim_test`, `evidence_view_test`).
+  The live "Customers Suck" compilation vs its true episode (Patsies, containment
+  1.0) went from scattered unpaired rows to 312 exact / 0 unpaired; its real
+  verdict is untouched — `review MISMATCH` suggesting S05E44 for a human to
+  confirm (`PLAN_VERSION` 25, rescan run).
 - **Half-position settles double-episode twins** (`PLAN_VERSION` 24). One
   OpenSubtitles text filed under an adjacent pair (S09E19 School Test + S09E20
   Snitchers) is broadcast order: the earlier episode fills the first half. When a
