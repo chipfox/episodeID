@@ -355,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 22
+PLAN_VERSION = 23
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -1041,6 +1041,9 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
 
     moving: set[str] = set()   # files that will leave their current path
     claimed_targets: dict[str, str] = {}
+    # Where each reference came from — needed both for the unknown-filename-code gate
+    # below and for the disputed-numbering distrust at the end of this function.
+    meta = ref_meta(series["tvdb_id"])
 
     for f in files:
         rel = f["rel"]
@@ -1182,16 +1185,32 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
 
         codes = [c[1] for c in usable]
         unknown = [c for c in f.get("expected") or [] if c not in eps]
+        unknown_rename = False
         if unknown and not any(c[2] == "manual" for c in usable):
             # The filename names an episode TVDB's list (as EpisodeID last loaded it)
             # doesn't have — most likely newer than the list (TVDB moved episodes into a
-            # new season, say). Don't rename on the old numbering.
-            items.append({**base, "kind": "review",
-                          "reason": f"{', '.join(unknown)} (from the filename) isn't in EpisodeID's "
-                                    "TVDB episode list — it may be newer than the list. Reload the "
-                                    "episode list (Episodes & references) and scan again.",
-                          "suggested": codes})
-            continue
+            # new season, say). The filename's numbering can't be trusted, but the file's
+            # own evidence can: when high-confidence dialogue settles exactly one episode
+            # the list does have, with no AI guess, reference conflict or twin behind it,
+            # the rename follows that evidence rather than the name, and stays unticked
+            # for an explicit human decision. Anything weaker is the old review.
+            unknown_rename = (len(set(codes)) == 1 and all(c in eps for c in codes)
+                              and not sample_only and not any(c[3] for c in usable)
+                              and all(c[2] == "high" for c in usable)
+                              and not f.get("reference_conflict")
+                              and not f.get("story_pair_overlap")
+                              # A disputed-numbering reference (OpenSubtitles/IMDb) is
+                              # exactly what a TVDB renumber leaves behind: matching it
+                              # would rename a correctly renumbered file back to the
+                              # old number. Wait for the episode list/reference instead.
+                              and not (meta.get(codes[0]) or {}).get("low_trust"))
+            if not unknown_rename:
+                items.append({**base, "kind": "review",
+                              "reason": f"{', '.join(unknown)} (from the filename) isn't in EpisodeID's "
+                                        "TVDB episode list — it may be newer than the list. Reload the "
+                                        "episode list (Episodes & references) and scan again.",
+                              "suggested": codes})
+                continue
         lost = [c for c in usable if winner.get(c[1], (None,))[0] != rel or
                 winner[c[1]][1] != c[0].get("start", 0)]
         ai = any(c[3] for c in usable)
@@ -1283,6 +1302,10 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             if "parts" in strengths:
                 why = (f"One file, {len(codes)} parts: its own transcript covers "
                        f"{', '.join(codes)} in order")
+            elif unknown_rename:
+                why = (f"{', '.join(unknown)} (from the filename) isn't in the episode list; "
+                       f"the file's own dialogue settles {codes[0]} — check the episode, "
+                       "then tick this row to apply")
             else:
                 why = ((f.get("note") or "Sample suggestion — check before applying")
                        if sample_only and not ai else
@@ -1292,7 +1315,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                           "reason": why,
                           "ai": ai, "codes": codes,
                           "targets": [{"path": dst_rel, "codes": codes}],
-                          "selected": not ai and (not sample_only or manually_set)})
+                          "selected": not unknown_rename and not ai and
+                                      (not sample_only or manually_set)})
             moving.add(rel)
             for cd in codes:
                 claimed_targets[cd] = rel
@@ -1333,7 +1357,6 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     #    (OpenSubtitles/IMDb number the episode differently from TVDB). Those can
     #    hold the neighbouring episode's dialogue, which looks exactly like two
     #    correctly named files that need swapping.
-    meta = ref_meta(series["tvdb_id"])
     for it in items:
         if it["kind"] not in ("rename", "split", "aside"):
             continue

@@ -22,7 +22,7 @@ from pathlib import Path
 from . import db
 from .config import get_settings
 from .planner import ACTIONABLE, backup_folder_name, backup_rel, backup_root, sidecars
-from .media_text import SUB_EXTS
+from .media_text import SUB_EXTS, VIDEO_EXTS
 
 
 class ApplyError(RuntimeError):
@@ -484,15 +484,31 @@ def apply_plan(series: dict, plan: dict, ctx) -> dict:
         _move(src, tmp, log, root, "temp")
         pending.append((tmp, final, f"rename {it['source']}"))
 
-    # 4. Pass two: temp names to their final names.
+    # 4. Pass two: temp names to final names. First clear every video path a rename
+    #    targets that something not in the plan occupies — the file goes WITH its
+    #    sidecars, before anything lands: a stale .srt left here would re-pair with
+    #    the file taking its place, and clearing sidecars one landing at a time lets
+    #    stem matching evict the very sidecar that just arrived.
+    for _tmp, final, _note in pending:
+        if final.suffix.lower() in VIDEO_EXTS and final.exists():
+            ctx.check_cancel()
+            aside = _free(backup / "conflicts" / final.relative_to(root))
+            for side in sidecars(final):
+                _move(side, _free(_sidecar_dst(side, final, aside)), log, root, "conflict sidecar")
+            _move(final, aside, log, root, "conflict")
+            # `backup` is resolved beside the series folder — relative_to(root) would
+            # raise; _rel renders it as the usual "../…" path.
+            ctx.log(f"  ! {final.relative_to(root)} was in the way; moved to "
+                    f"{_rel(aside, root)}")
     for tmp, final, note in pending:
         ctx.check_cancel()
         if final.exists():
-            # Something not in the plan is sitting there; never overwrite it.
+            # Something not in the plan is sitting there (a sidecar name clash, or a
+            # file that appeared since the scan); never overwrite it.
             aside = _free(backup / "conflicts" / final.relative_to(root))
             _move(final, aside, log, root, "conflict")
             ctx.log(f"  ! {final.relative_to(root)} was in the way; moved to "
-                    f"{aside.relative_to(root)}")
+                    f"{_rel(aside, root)}")
         _move(tmp, final, log, root, note)
         ctx.log(f"  → {final.relative_to(root)}")
 

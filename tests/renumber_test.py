@@ -1,7 +1,9 @@
 """TVDB renumbering (Phineas and Ferb: S05E39/S05E40 became S06E01/S06E02).
 The episode list refreshes itself when stale, and references, hand-set episodes and
 wiki pages move to the new numbers. A filename naming an episode the list doesn't
-have isn't renamed."""
+have is never renamed automatically: the row may offer the episode the file's own
+dialogue settles, but unticked, for an explicit human decision — while the list is
+stale, or after it self-heals, nothing ever applies by itself."""
 import json
 import os
 import shutil
@@ -32,14 +34,18 @@ refs_dir(81848).mkdir(parents=True)
 manual_dir(81848).mkdir(parents=True)
 (manual_dir(81848) / "S05E40 my upload.txt").write_text("CANDACE: altspace " * 50)
 
-# Planner guard, with the stale list: S06E01 (from the filename) isn't known → no rename.
+# Planner gate, with the stale list: S06E01 (from the filename) isn't known. The file's
+# own dialogue settles S05E39, so the row now offers that rename — but unticked, never
+# auto-applied: the list may be about to renumber this episode back to S06E01.
 f = {"rel": "Season 6/Phineas and Ferb - S06E01 - Night of the Living Candace Suits WEBDL-1080p.mkv",
      "expected": ["S06E01"], "status": "MISMATCH", "duration": 700,
      "segments": [{"start": 0, "end": 700, "code": "S05E39", "score": .6, "confidence": "high"}]}
 (root / f["rel"]).touch()
 it = planner.build_plan(db.get_series(sid), {"files": [f]})[0]
 print(" stale list:", it["kind"], "—", it["reason"][:90])
-assert it["kind"] == "review" and "isn't in EpisodeID's" in it["reason"]
+assert it["kind"] == "rename" and it["codes"] == ["S05E39"], it
+assert it["selected"] is False, "a rename on a possibly-stale list never pre-ticks"
+assert "isn't in the episode list" in it["reason"] and "check" in it["reason"], it["reason"]
 
 tvdb.series_episodes = lambda _id: ep(NEW)
 j = db.add_job("scan", sid, {})

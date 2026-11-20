@@ -3,6 +3,38 @@
 Tracks this fork's scan, matcher, and reference-quality changes. Format follows Keep a
 Changelog; release image tags identify their source commit.
 
+## [Unreleased] — 2026-11-20
+
+### Changed
+- **Evidence over an unknown filename number is now applicable** (`PLAN_VERSION` 23).
+  A file named for an episode the loaded TVDB list doesn't have (Beavis S01E04, where
+  season 1 ends at S01E03) used to be a permanent dead-end review — "reload the
+  episode list" — even when its dialogue and title card both settled one episode the
+  list does have, and the plan's Apply only counts rename rows, so ticking the box
+  still said "Apply 0 changes". Such a row now becomes a rename to the episode the
+  file's own high-confidence dialogue settles — never pre-ticked, with the reason
+  spelling out what to check. The offer is withheld when the answer came from the AI,
+  rests on a sample, has a reference conflict or twin, or matches a reference whose
+  numbering is disputed (a TVDB renumber's usual footprint — `renumber_test` now
+  pins the unticked-contract instead of the old refusal).
+- The plan UI gains a **Rename to \<CODE\>** button on review rows whose evidence
+  names exactly one listed episode: one click records the episode as your decision
+  and opens the normal Apply confirmation, which now lists each file → new path and
+  says sidecars move along. A disabled Apply button explains itself when the checked
+  rows hold no pending change instead of reading "Apply 0 changes".
+
+### Fixed
+- **An apply no longer aborts mid-rename when something not in the plan sits at the
+  target path.** The conflict log line called `relative_to()` on the backup folder,
+  which resolves beside the series folder, raising `ValueError` after files had
+  already moved. The moved-aside file now takes its **sidecars** with it, before
+  anything lands: a stale `.srt` left behind re-paired with the incoming file and
+  the next rescan saw the old episode again (found by `synthetic_test`, which now
+  passes its carried-plan and undo invariants end to end).
+- The plan carried forward after an apply dropped scan entries for files the apply
+  moved to the backup folder *before* a rename took their path — no more phantom
+  duplicate rows for the same filename.
+
 ## [Unreleased] — 2026-11-14
 
 ### Changed

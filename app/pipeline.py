@@ -2029,6 +2029,12 @@ def _plan_after_apply(series: dict, plan: dict, ctx) -> int | None:
     done = {rel: it for it in plan["items"]
             if it.get("selected") and it["kind"] in ("rename", "split", "aside", "join")
             for rel in (it.get("sources") or [it["source"]])}
+    # Paths the applied plan lands files on. A file that wasn't in the plan and sat on
+    # one of these was moved to conflicts by the apply (executor, pass two), so its
+    # scan entry must not carry forward — the file that now occupies the path already
+    # has its own entry below.
+    claimed = {t["path"] for it in done.values() for t in (it.get("targets") or [])
+               if not t.get("duplicate")}
     joined: set[int] = set()
     opts = dict(series.get("options") or {})
     overrides = dict(opts.get("overrides") or {})
@@ -2036,7 +2042,7 @@ def _plan_after_apply(series: dict, plan: dict, ctx) -> int | None:
     for f in scan["results"]["files"]:
         it = done.get(f["rel"])
         if not it:
-            if (root / f["rel"]).exists():
+            if (root / f["rel"]).exists() and f["rel"] not in claimed:
                 files.append(f)
             continue
         ov = overrides.get(f["rel"])  # kept under the old name too, for Undo

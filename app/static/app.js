@@ -746,6 +746,11 @@ async function tabPlan(reload = true) {
   const selCount = actionable.filter((it) => it.selected).length;
   const rescanCount = plan.items.filter((it) => it.selected).length;
   const changedCount = plan.items.filter((it) => it.previous).length;
+  // Checked rows that aren't changes (review rows are checkable for Rescan): say why
+  // Apply stays at zero instead of looking broken.
+  const applyHint = selCount ? "Apply every checked row that changes a file — sidecar files move with each file"
+    : rescanCount ? `${rescanCount} row${rescanCount === 1 ? "" : "s"} checked, but none has a pending file change — use Rescan checked, or Rename to the episode the evidence points at`
+    : "Tick a row with a pending change first";
 
   tab.innerHTML = `<div class="plan-toolbar">
       <div class="filters">${filters.map(([k, l, n]) =>
@@ -758,7 +763,7 @@ async function tabPlan(reload = true) {
       </label>
       <div class="plan-toolbar-right">
         <span class="plan-meta" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} <span class="dot">·</span> ${timeTag(plan.created)}${changedCount ? ` <span class="badge b-info" title="${changedCount} rows whose verdict differs from the plan before this scan">${changedCount} verdicts changed</span>` : ""}${applied ? ` <span class="badge b-ok">applied</span>` : ""}</span>
-        ${applied ? "" : `<button class="btn primary" id="apply" ${selCount ? "" : "disabled"}>Apply ${selCount} change${selCount === 1 ? "" : "s"}…</button>`}
+        ${applied ? "" : `<button class="btn primary" id="apply" ${selCount ? "" : "disabled"} title="${esc(applyHint)}">Apply ${selCount} change${selCount === 1 ? "" : "s"}…</button>`}
       </div>
     </div>
     <div class="plan-tools">
@@ -821,6 +826,24 @@ async function tabPlan(reload = true) {
   syncAll($("#all-sel", tab));
   syncAll($("#all-visible", tab));
   $$("button.set-ep", tab).forEach((b) => b.onclick = () => setEpisodeDialog(b.dataset.src, b.dataset.cur));
+  $$("button.evi-apply", tab).forEach((b) => b.onclick = async () => {
+    // One click turns the row's evidence into a manual episode decision, then opens
+    // the normal Apply confirmation — exactly what ticking a rename row does, but the
+    // evidence is what set the episode, not a typed code.
+    const src = b.dataset.src, code = b.dataset.code;
+    try {
+      const p2 = await api(`/api/series/${state.series.id}/overrides`,
+        { method: "POST", body: { source: src, codes: [code] } });
+      state.plan = p2;
+      const rows = p2.items.filter((x) => x.selected && ACTIONABLE.includes(x.kind));
+      if (!rows.some((x) => x.source === src)) {
+        tabPlan();
+        toast(`Episode set to ${code}, but the plan still offers no change for this file — check the row.`);
+        return;
+      }
+      confirmApply(p2, rows);
+    } catch (e) { fail(e); }
+  });
   $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code));
   $$("button.card-check", tab).forEach((b) => b.onclick = () => cardCheckDialog(b.dataset.src));
   $$("button.rescan", tab).forEach((b) => b.onclick = () => {
@@ -1330,7 +1353,21 @@ function methodsHtml(methods) {
   }).join("")}</div>`;
 }
 
+// A review row whose evidence names exactly one episode the list has: the user can
+// apply that verdict as a rename in one click (manual override + normal Apply path,
+// which moves the file and its sidecar files). Rows already set by hand keep the
+// Set episode / Clear override controls instead.
+function evidenceApplyCode(it, eps) {
+  if (it.kind !== "review" || it.status === "MANUAL") return "";
+  const codes = it.suggested || [];
+  if (codes.length !== 1) return "";
+  const code = codes[0];
+  if (!eps[code] || (it.expected || []).includes(code)) return "";
+  return code;
+}
+
 function rowHtml(it, eps, applied) {
+  const evi = applied ? "" : evidenceApplyCode(it, eps);
   const targets = (it.targets || []).map((t) =>
     `<div class="arrow">↳ <span class="path">${esc(t.path.replace(/^(\.\.\/)+/, ""))}</span>${t.duplicate ? ' <span class="badge b-bad">duplicate</span>' : ""}</div>`).join("");
   const segs = (it.segments || []).map((sg) => segHtml(sg, eps)).join("") ||
@@ -1362,6 +1399,7 @@ function rowHtml(it, eps, applied) {
     <td>${segs}${src}</td>
     <td class="detect-cell">${methodsHtml(it.methods)}</td>
     <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare</button>` : ""}
+      ${evi ? `<button class="btn small evi-apply" data-src="${esc(it.source)}" data-code="${esc(evi)}" title="The evidence points at ${esc(evi)} — set that episode and walk straight into Apply; the file and its sidecar files move together">Rename to ${esc(evi)}</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
@@ -1726,10 +1764,13 @@ function sonarrCompareDialog() {
 
 function confirmApply(plan, items) {
   const n = (k) => items.filter((i) => i.kind === k).length;
+  const list = items.slice(0, 40).map((i) => `<div class="mono small" style="margin:2px 0">
+      <b>${esc(i.kind)}</b> <span class="path">${esc(i.source)}</span>${(i.targets || []).length ?
+        ` → ${i.targets.map((t) => `<span class="path">${esc(t.path.replace(/^(\.\.\/)+/, ""))}</span>`).join(" → ")}` : ""}</div>`).join("");
   const box = modal(`<h2 style="margin-top:0">Apply ${items.length} changes?</h2>
-    <ul><li>${n("rename")} renames</li><li>${n("split")} splits (lossless, original kept in the backup folder)</li>
-    ${n("join") ? `<li>${n("join")} joins of multi-part files (lossless, parts kept in the backup folder)</li>` : ""}
-    <li>${n("aside")} files moved to the backup folder</li></ul>
+    ${list}${items.length > 40 ? `<div class="muted small">…and ${items.length - 40} more</div>` : ""}
+    <p class="muted small">${n("rename")} renames, ${n("split")} splits (lossless, original kept in the backup folder)${n("join") ? `, ${n("join")} joins of multi-part files (lossless, parts kept in the backup folder)` : ""}, ${n("aside")} files moved to the backup folder.
+      Sidecar files (subtitles, metadata) move with each video.</p>
     <p class="muted small">Nothing is deleted. Every step is logged and can be undone from the History tab.</p>
     <p>Type <b>APPLY</b> to continue:</p>
     <input type="text" id="confirm" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg)">
