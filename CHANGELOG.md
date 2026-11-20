@@ -6,6 +6,9 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Telegraphic evidence labels.** The compare dialog reads `83.4% word-pair match · 1006 file pairs`,
+  `49 exact · 48 similar · 40 file only · 228 reference only`, `scan matches:` — sentences removed
+  where a swatch or the sticky header already carries the meaning; the duplicate word-count line is gone.
 - **A shared subtitle is named by every code it covers.** S09E19 and S09E20
   (Beavis) share one OpenSubtitles text filed under both codes: moving the picker
   between them swapped identical text, which reads as a broken picker. `twin_groups`
