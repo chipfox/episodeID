@@ -178,7 +178,7 @@ assert after["containment"] is not None and after["containment"] < 0.35, after["
 # carries the line is "near", and a sentence from only one side keeps its row
 # with the other side blank. Both sources are one run-on line, so this must
 # chunk on sentence ends, not newlines.
-from app.textsim import chunks  # noqa: E402
+from app.textsim import align, chunks  # noqa: E402
 
 db.update_series(sid, episodes=[
     {"season": 1, "episode": 1, "title": "Pilot", "aired": "2020-01-01"},
@@ -212,5 +212,16 @@ assert c.get(f"/api/series/{sid}/evidence", params={"code": "S01E03"}).json()["d
 anone = c.get(f"/api/series/{sid}/evidence",
               params={"rel": "Season 1/Show - S01E03 - Radio.mkv", "code": "S01E04"}).json()
 assert anone["reference"] is None and anone["diff"] is None
+
+# A transcript chunk that merged two subtitle lines still pairs with the short
+# line it fully contains, even when Jaccard alone would call it too different.
+merged = align("Robert Urich Melissa Gilbert Lou Ferrigno return to Asbestos in "
+               "Obstetrics tonight with special guest star cameos",
+               "Melissa Gilbert in Asbestos in Obstetrics")
+assert merged["counts"] == {"same": 0, "near": 1, "file": 0, "ref": 0}, merged["counts"]
+# Two lines that merely open with the same catchphrase never pair on containment:
+# shared words below the floor stay on their own sides.
+greet = align("Hey Butt-Head what is wrong with television", "Hey Butt-Head let us breathe gas")
+assert greet["counts"]["near"] == 0, greet["counts"]
 
 print("PASS (evidence view + shared terms + aligned compare rows)")

@@ -161,7 +161,18 @@ def _line_similarity(ka: frozenset, kb: frozenset) -> float:
     shared = len(ka & kb)
     if shared < NEAR_SHARED:
         return 0.0
-    return shared / len(ka | kb)
+    jaccard = shared / len(ka | kb)
+    if jaccard >= NEAR_SIMILARITY:
+        return jaccard
+    # A speech-to-text line often merges what the subtitles wrote as two lines:
+    # the short subtitle line can sit inside the long transcript chunk without
+    # lifting Jaccard. Let a short side that is nearly all contained count as a
+    # pair — but only for a genuinely merged-size gap, or two lines merely
+    # opening with the same catchphrase would pair.
+    short, long_ = (len(ka), len(kb)) if len(ka) <= len(kb) else (len(kb), len(ka))
+    if long_ >= 2 * short and shared / short >= 0.75:
+        return 0.75
+    return 0.0
 
 
 def _pair_block(al: list[str], bl: list[str], near: float) -> list[tuple]:
