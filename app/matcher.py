@@ -44,6 +44,12 @@ def parse_filename_episodes(name: str) -> list[str]:
 
 FEW_REFS = 5          # below this many references a match needs to be plainly that episode
 PLAINLY_SAME = 0.35   # (= references.SAME_EPISODE_SCORE) similarity of the same episode
+HALF_WIN = 0.5        # a half of a shared subtitle must hold this much of the file
+HALF_RATIO = 2.0      # ...and by this margin over the other half
+HALF_COVER = 0.6      # the winning half must itself lie this mostly inside the file
+HALF_FILE_SHARE = 0.7 # above this share of the shared text the file IS both episodes
+
+_EPNUM = re.compile(r"S(\d+)E(\d+)")
 
 
 class Matcher:
@@ -103,6 +109,50 @@ class Matcher:
                 continue
             if self._reference_similarity(code, other) >= threshold:
                 return other
+        return None
+
+    def _half_position(self, text: str, words: int, top: str | None, twin: str | None):
+        """Which twin's episode a file is, by WHERE it matches the shared subtitle.
+
+        A two-parter released as one OpenSubtitles text filed under both codes is
+        really two episodes' dialogue in broadcast order: the earlier episode is
+        the first half of the text. So a file whose dialogue falls in one half
+        IS that episode, even though the whole text cannot say which. Returns
+        (winner, earlier, later, (first_half_score, second_half_score)), or None
+        when the halves do not settle it — both halves matching means the file
+        carries the double episode and must not be pinned to one.
+        """
+        from .references import DUP_MIN_BIGRAMS
+        if not top or not twin or top not in self.refs or twin not in self.refs:
+            return None
+        m_top, m_twin = _EPNUM.match(top), _EPNUM.match(twin)
+        if not (m_top and m_twin):
+            return None
+        (s1, e1), (s2, e2) = m_top.groups(), m_twin.groups()
+        if s1 != s2 or abs(int(e1) - int(e2)) != 1:
+            return None  # adjacent codes are double episodes; distant ones are duplicate listings
+        ga, gb = textsim.bigrams(self.refs[top]), textsim.bigrams(self.refs[twin])
+        dup = float(self.s["reference_duplicate_similarity"])
+        if min(len(ga), len(gb)) < DUP_MIN_BIGRAMS or textsim.overlap(ga, gb) < dup:
+            return None  # not one text filed twice; halves would be two real episodes
+        earlier, later = (top, twin) if int(e1) < int(e2) else (twin, top)
+        words_ref = self.refs[earlier].split()
+        mid = len(words_ref) // 2
+        q = textsim.bigrams(text)
+        if len(q) < textsim.BIGRAM_FLOOR or len(words_ref) < 2 * textsim.BIGRAM_FLOOR:
+            return None
+        if words > HALF_FILE_SHARE * len(words_ref):
+            return None  # the file holds (nearly) the whole double's dialogue
+        c1 = textsim.containment(q, textsim.bigrams(" ".join(words_ref[:mid])))
+        c2 = textsim.containment(q, textsim.bigrams(" ".join(words_ref[mid:])))
+        winner, win, lose = ((earlier, c1, c2) if c1 >= c2 else (later, c2, c1))
+        # The winner's half must lie mostly INSIDE the file too: one wiki page
+        # filed under two numbers and a partial recording of only its first
+        # chapters scores one-sided direction with no episode-sized coverage.
+        cover = textsim.containment(textsim.bigrams(
+            " ".join(words_ref[:mid] if winner == earlier else words_ref[mid:])), q)
+        if win >= HALF_WIN and win >= HALF_RATIO * max(lose, 1e-9) and cover >= HALF_COVER:
+            return winner, earlier, later, (round(c1, 3), round(c2, 3))
         return None
 
     # ------------------------------------------------------------------
@@ -204,6 +254,28 @@ class Matcher:
                 out[-1]["score"] = max(out[-1]["score"], sg["score"])
             else:
                 out.append(sg)
+        # A shared double-episode subtitle cannot say which half was read — but
+        # WHERE in it the file matched does. When one half holds the dialogue,
+        # that half's episode replaces the twins: one high segment over the file,
+        # and the conflict veto lifts because the position IS the proof.
+        half = self._half_position(whole_text, evidence["words"],
+                                   evidence["top1"], evidence["twin"])
+        if half:
+            winner, earlier, later, (c1, c2) = half
+            which = "first" if winner == earlier else "second"
+            out = [{
+                "start": 0.0, "end": round(end_t, 1), "code": winner,
+                "score": max(c1, c2), "margin": abs(c1 - c2),
+                "confidence": "high", "alternatives": [],
+                "words": evidence["words"],
+                "why": f"matched the {which} half of the {earlier}+{later} "
+                       f"shared subtitle ({c1} vs {c2})",
+            }]
+            evidence["top1"] = winner
+            evidence["conflicted"] = False
+            evidence["twin"] = None
+            evidence["half"] = {"codes": [earlier, later], "winner": winner,
+                                "halves": [c1, c2]}
         return {"segments": out, "whole": whole, "evidence": evidence}
 
     def _viterbi(self, S: np.ndarray) -> list[int | None]:

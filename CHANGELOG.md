@@ -6,6 +6,18 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Half-position settles double-episode twins** (`PLAN_VERSION` 24). One
+  OpenSubtitles text filed under an adjacent pair (S09E19 School Test + S09E20
+  Snitchers) is broadcast order: the earlier episode fills the first half. When a
+  full transcript's word pairs fall ≥2× into one half (≥0.5 containment, ≥0.6
+  coverage of that half from the file, file ≤70% of the shared text's words), the
+  matcher emits one high segment for that half's episode and lifts the
+  identical-reference veto — position IS the proof. On the live library the
+  decisive case is Snitchers → S09E20 (0.83 vs 0.10, half covered 0.72); files
+  whose ASR matches weakly in absolute terms (~0.10) and real double files both
+  fail the gates and stay deferred, as do distant duplicate codes (S05E24/
+  S05E36), merely-similar references, and partial recordings of the opening
+  (`twin_halves_test`).
 - **Telegraphic evidence labels.** The compare dialog reads `83.4% word-pair match · 1006 file pairs`,
   `49 exact · 48 similar · 40 file only · 228 reference only`, `scan matches:` — sentences removed
   where a swatch or the sticky header already carries the meaning; the duplicate word-count line is gone.
