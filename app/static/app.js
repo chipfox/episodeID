@@ -1329,7 +1329,9 @@ async function evidenceDialog(rel, code) {
       lines.push(`<div><span class="badge ${cls}">${(next.containment * 100).toFixed(1)}%</span> ` +
         `of the ${side}'s word pairs appear in this reference` +
         `<span class="muted small"> — ${nf.bigrams} pairs${r ? `, ${r.words}-word reference` : ""}</span></div>`);
-    } else if (nf.words) {
+    } else if (nf.words && r) {
+      // Only say "too little dialogue" when a reference was actually there to
+      // compare against; without one, the banner above already says why.
       lines.push(`<div class="muted">Too little dialogue to compare — ${nf.bigrams || 0} word pairs, ` +
         `${next.bigram_floor} needed.</div>`);
     }
