@@ -22,8 +22,8 @@ import os
 
 from .config import MEDIA_ROOT, get_settings, safe_media_path
 from .media_text import SUB_EXTS, VIDEO_EXTS, cached_dialogue, dialogue_text
-from .references import describe_conflict, ref_meta
-from . import textsim
+from .references import describe_conflict, load_refs, ref_meta
+from . import confirmations, textsim
 
 META_EXTS = {".nfo", ".jpg", ".jpeg", ".png", ".tbn", ".xml"}
 QUALITY_RE = re.compile(
@@ -355,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 29
+PLAN_VERSION = 30
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -1046,6 +1046,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     files_by_rel = {f["rel"]: f for f in files}
     items: list[dict] = []
     overrides = (series.get("options") or {}).get("overrides") or {}
+    remembered = (series.get("options") or {}).get("confirmations") or {}
+    confirmation_refs = load_refs(series["tvdb_id"]) if remembered else {}
 
     # Manual overrides typed in the UI: one code per segment, or one code for the whole file.
     for f in files:
@@ -1610,8 +1612,14 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 and local.get("whole_file") and local["file_coverage"] >= .58 and not local.get("code")
                 and expected[0] in {local.get("reference"), (it.get("evidence") or {}).get("twin")}
                 and _combined_duration_ok(it, expected, duration_factors, eps)):
-            it["proposal"] = {"codes": expected, "action": "keep",
-                              "reason": "The passage explains the file's dialogue. Confirm the current episode label by hand; no file will move."}
+            saved = remembered.get(it["source"])
+            file = files_by_rel[it["source"]]
+            if saved and saved.get("proof") and saved["proof"] == confirmations.identity(series, file, confirmation_refs):
+                it.update(kind="ok", decided_by="you", confirmed_on=saved["date"],
+                          reason=f"You confirmed {expected[0]} on {saved['date']}; the file and reference are unchanged")
+            else:
+                it["proposal"] = {"codes": expected, "action": "keep",
+                                  "reason": "The passage explains the file's dialogue. Confirm the current episode label by hand; no file will move."}
         if (it["kind"] == "review" and combined.get("state") == "verified" and codes
                 and codes != it["expected"] and all(c in eps for c in codes)
                 and not it.get("claimed_by") and not it.get("sample")

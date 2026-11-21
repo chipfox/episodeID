@@ -89,10 +89,12 @@ assert matched["reference"]["passage"] and matched["file"]["words"] < 400, match
 assert gap["code"] == code_b and gap["file"]["focused"]["kind"] == "remaining"
 assert not gap["reference"]["passage"] and gap["file"]["words"] < 230
 
-keep, _ = detect(cues(a), [code_a], [], 600)
+keep, keep_data = detect(cues(a), [code_a], [], 600)
+cache.write_text(json.dumps(keep_data))
 keep["evidence"]["twin"] = code_a
 scan = {"files": [{**keep, "rel": video.name, "status": "LOW_CONFIDENCE", "scope": "full",
-                   "text_source": "embedded #1", "duration": 600, "expected": [code_a]}]}
+                   "text_source": "embedded #1", "duration": 600, "expected": [code_a],
+                   "size": video.stat().st_size, "mtime_ns": video.stat().st_mtime_ns}]}
 scan_id = db.add_scan(sid, scan)
 rows = build_plan(db.get_series(sid), scan)
 assert rows[0]["proposal"]["action"] == "keep", rows
@@ -108,5 +110,14 @@ done = client.post(url, json={"token": preview.json()["token"]})
 assert done.status_code == 200, done.text
 row = done.json()["items"][0]
 assert row["kind"] == "ok" and not row["selected"] and not row.get("targets")
+assert row["confirmed_on"] and "overrides" not in db.get_series(sid)["options"]
+assert build_plan(db.get_series(sid), scan)[0]["kind"] == "ok"
+cache.write_text(json.dumps({**keep_data, "cues": cues(c)}))
+assert build_plan(db.get_series(sid), scan)[0]["kind"] == "review"
+cache.write_text(json.dumps(keep_data))
+_save(999202, broad, {"source": "opensubtitles", "text": ref + " changed"})
+assert build_plan(db.get_series(sid), scan)[0]["kind"] == "review"
+_save(999202, broad, {"source": "opensubtitles", "text": ref})
+assert client.post(f"/api/series/{sid}/overrides", json={"source": video.name, "codes": None}).json()["items"][0]["kind"] == "review"
 assert video.is_file() and not db.list_applies(sid)
 print("PASS (local and residual matches, evidence-only untrusted, focused Compare)")

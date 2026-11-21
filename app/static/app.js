@@ -1454,6 +1454,7 @@ function rowHtml(it, eps, applied) {
     <td><div class="badge-row"><span class="badge ${KIND_BADGE[it.kind]}">${esc(KIND_LABEL[it.kind] || it.kind)}</span>
       <span class="badge ${STATUS_BADGE[it.status] || ""}" title="${esc(it.note || "")}">${esc(it.status)}</span>
       ${it.decided_by && it.decided_by !== "dialogue" ? `<span class="badge ${it.decided_by === "AI" ? "b-ai" : "b-info"}" title="What settled this row${it.decided_confidence ? ` (${Math.round(it.decided_confidence * 100)}% confidence)` : ""}">${esc(DECIDED_LABEL[it.decided_by] || it.decided_by)}${it.decided_by === "AI" && it.decided_confidence ? ` ${Math.round(it.decided_confidence * 100)}%` : ""}</span>` : ""}
+      ${it.confirmed_on ? `<span class="badge b-info">Confirmed ${esc(it.confirmed_on)}</span>` : ""}
       ${it.previous ? `<span class="badge b-info" title="Changed by the last scan — was ${esc(it.previous.kind)} (${esc(it.previous.status)}), now ${esc(it.kind)} (${esc(it.status)})">changed</span>` : ""}
       ${it.sample ? `<span class="badge" title="Settled from a sample of the first 10 minutes — open Compare… → Read whole file to check every line">sample</span>` : ""}
       ${it.ref_warning ? '<span class="badge b-warn">check reference</span>' : ""}
@@ -1476,7 +1477,7 @@ function rowHtml(it, eps, applied) {
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
-        ${ovr ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">Clear episode override</button>` : ""}`}
+        ${ovr || it.confirmed_on ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">${it.confirmed_on ? "Revoke confirmation" : "Clear episode override"}</button>` : ""}`}
         <button class="btn small card-check" data-src="${esc(it.source)}" title="See what the title-card OCR reads in part of this file">Check title cards…</button>
         ${state.ai && !applied && it.kind !== "ok" && it.text_source && it.text_source !== "none" ? `<button class="btn small ai-check" data-src="${esc(it.source)}" title="Ask the AI which episode this file's dialogue is, from the TVDB summaries of the likely episodes">Ask AI</button>` : ""}
         ${it.kind === "review" && it.sample && !applied ? `<button class="btn small full-scan" data-src="${esc(it.source)}" title="Transcribe and match the whole file — settles it with every line, not just the sample windows">Full-file match</button>` : ""}

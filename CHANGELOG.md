@@ -6,6 +6,9 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Remember verified Keep filename decisions.** A confirmation survives rescans
+  only while the same file, full dialogue, duration and reference are unchanged.
+  Revoke it from the row menu. Nothing propagates silently to another encode.
 - **Review unresolved duplicate claims with sampled audio.** A scan may compare
   cached Chromaprint windows when full dialogue cannot settle a competing file.
   A strong audio match produces one review for the pair, not a new episode label;

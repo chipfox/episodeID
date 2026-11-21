@@ -1172,6 +1172,13 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
             if not pair or not audio_pair_current(root, source, pair):
                 raise HTTPException(409, "One of the audio matches changed. Rescan both files.")
             options["audio_duplicates"] = {**(options.get("audio_duplicates") or {}), source: pair}
+        elif action == "keep":
+            from .confirmations import record
+            scanned = next((f for f in scan["results"]["files"] if f["rel"] == source), {})
+            saved = record(series, scanned, load_refs(series["tvdb_id"]))
+            if not saved or saved["proof"]["codes"] != proposal["codes"]:
+                raise HTTPException(409, "Full-file evidence changed. Rescan before confirming this label.")
+            options["confirmations"] = {**(options.get("confirmations") or {}), source: saved}
         else:
             options["overrides"] = {**(options.get("overrides") or {}), source: proposal["codes"]}
         rows = build_plan({**series, "options": options}, scan["results"])
@@ -1249,6 +1256,8 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
 @app.post("/api/series/{sid}/overrides")
 def set_override(sid: int, body: Override):
     s = db.get_series(sid) or _404()
+    if db.active_job(sid):
+        raise HTTPException(409, "Wait for the current job to finish before changing an episode decision.")
     opts = dict(s["options"] or {})
     ov = dict(opts.get("overrides") or {})
     if body.codes:
@@ -1264,8 +1273,16 @@ def set_override(sid: int, body: Override):
     else:
         ov.pop(body.source, None)
     opts["overrides"] = ov
+    saved = dict(opts.get("confirmations") or {})
+    revoked = not body.codes and body.source in saved
+    if body.source in saved:
+        saved.pop(body.source)
+        opts["confirmations"] = saved
     db.update_series(sid, options=opts)
     scan = db.latest_scan(sid)
+    draft = db.latest_plan(sid) if revoked else None
+    if draft and draft["status"] == "draft" and scan and draft["scan_id"] == scan["id"]:
+        return _rebuild_plan(db.get_series(sid), draft) or plan_get(sid)
     if scan:
         from .planner import build_plan
         items = build_plan(db.get_series(sid), scan["results"])
