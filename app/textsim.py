@@ -23,7 +23,7 @@ _QUOTE = str.maketrans({"’": "'", "‘": "'", "‛": "'", "ʼ": "'", "`": "'",
                         "–": "-", "—": "-"})
 
 
-def norm(text: str) -> str:
+def norm(text: str, *, lower: bool = True) -> str:
     """The one punctuation view every comparison in the app shares.
 
     Smart apostrophes are the killer: every tokenizer here matches words as
@@ -33,7 +33,9 @@ def norm(text: str) -> str:
     like I'‘m splits "I'm" the same way. Unify quotes, fold repeated
     apostrophes, lowercase, collapse whitespace.
     """
-    t = (text or "").lower().translate(_QUOTE)
+    t = (text or "").translate(_QUOTE)
+    if lower:
+        t = t.lower()
     t = re.sub(r"'{2,}", "'", t)
     return re.sub(r"\s+", " ", t)
 

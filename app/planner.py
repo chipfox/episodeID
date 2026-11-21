@@ -355,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 27
+PLAN_VERSION = 28
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -1146,8 +1146,16 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 items.append({**base, "combined": combined, "codes": codes, "kind": "ok", "decided_by": "parts",
                               "reason": "Correct — independently labeled dialogue spans agree with the filename"})
             else:
-                reason = ("Distinct labeled spans were matched. Review the ordered episode codes."
-                          if verified else "Combined reference matched; episode labels unresolved. No files moved.")
+                local = combined.get("local") or {}
+                if verified:
+                    reason = "Labeled dialogue spans matched. Review the episode codes."
+                elif local.get("whole_file"):
+                    reason = "File dialogue matched one reference passage; episode label unresolved."
+                elif local:
+                    reason = (f"{local['code']} confirmed for part of the file; review the remaining dialogue."
+                              if local.get("code") else "Part of the file matched; review the unmatched dialogue and episode labels.")
+                else:
+                    reason = "Combined reference matched; episode labels unresolved. No files moved."
                 if verified and not plausible:
                     reason += " Runtime does not corroborate this identification."
                 items.append({**base, "combined": combined, "kind": "review", "reason": reason,
@@ -1519,6 +1527,16 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             it["proposal"] = {"codes": codes, "action": "rename",
                               "reason": "File dialogue and a full title-card read agree"}
         combined = it.get("combined") or {}
+        local = combined.get("local") or {}
+        expected = it["expected"]
+        if (it["kind"] == "review" and len(expected) == 1 and expected[0] in eps
+                and not it.get("sample") and not it.get("claimed_by")
+                and combined.get("state") != "verified" and local.get("trusted")
+                and local.get("whole_file") and local["file_coverage"] >= .58 and not local.get("code")
+                and expected[0] in {local.get("reference"), (it.get("evidence") or {}).get("twin")}
+                and _combined_duration_ok(it, expected, duration_factors, eps)):
+            it["proposal"] = {"codes": expected, "action": "keep",
+                              "reason": "The passage explains the file's dialogue. Confirm the current episode label by hand; no file will move."}
         if (it["kind"] == "review" and combined.get("state") == "verified" and codes
                 and codes != it["expected"] and all(c in eps for c in codes)
                 and not it.get("claimed_by") and not it.get("sample")

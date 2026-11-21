@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, db, executor, jobs, llm, textsim, titlecard, tvdb
+from . import __version__, db, executor, jobs, llm, spanmatch, textsim, titlecard, tvdb
 from . import integrity, pipeline, redownload  # noqa: F401  (registers job handlers)
 from . import summary as summary_match
 from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, language_choices,
@@ -22,7 +22,7 @@ from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, langu
 from .references import (OpenSubtitles, clear_reference, ep_code, load_refs, manual_dir,
                          reference_grams, twin_groups)
 from .views import best_dialogue, episode_match, series_out
-from .media_text import VIDEO_EXTS
+from .media_text import VIDEO_EXTS, cached_dialogue, dialogue_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("episodeid")
@@ -710,7 +710,7 @@ def delete_reference(sid: int, code: str):
 
 
 @app.get("/api/series/{sid}/evidence")
-def evidence_view(sid: int, rel: str = "", code: str = ""):
+def evidence_view(sid: int, rel: str = "", code: str = "", focus: str = "", part: int = 0):
     """The dialogue a scan judged one file on, beside one episode's reference text.
 
     The GUI shows these side by side so a person can read the two and decide for
@@ -722,6 +722,8 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
     eps = {ep_code(e["season"], e["episode"]): e for e in series["episodes"] if e["season"] > 0}
     chosen = code.strip().upper()
     file_out = None
+    combined = {}
+    focused = None
 
     if rel:
         scan = db.latest_scan(sid)
@@ -732,11 +734,29 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
         if entry is None:
             raise HTTPException(404, "That file is not in the latest scan — scan again")
         text, scope = best_dialogue(series, rel, entry)
+        combined = (entry.get("evidence") or {}).get("combined") or {}
+        local = combined.get("local") or {}
+        remaining = combined.get("remaining") or []
+        target = (local if focus == "matched" else
+                  remaining[part] if focus == "remaining" and 0 <= part < len(remaining) else {})
         start, end = ((entry.get("sample_start"), entry.get("sample_end"))
                       if scope in ("sample", "excerpt") else (None, None))
+        if target and scope == "full":
+            try:
+                data = cached_dialogue(safe_media_path(Path(series["path"]) / rel)) or {}
+            except (OSError, ValueError):
+                data = {}
+            selected = [cue for cue in data.get("cues") or []
+                        if cue[1] > target["start"] and cue[0] < target["end"]]
+            if selected:
+                text = dialogue_text(selected, limit=400_000)
+                start, end = target["start"], target["end"]
+                focused = {"kind": focus, "start": start, "end": end}
         if not chosen:
             segs = entry.get("segments") or []
-            chosen = str((segs[0].get("code") if segs else "")
+            chosen = str(target.get("reference") or target.get("code") or target.get("candidate")
+                         or target.get("summary_candidate") or local.get("reference")
+                         or (segs[0].get("code") if segs else "")
                          or ((entry.get("expected") or [""])[0]) or "").upper()
         file_out = {
             "rel": rel, "status": entry.get("status"), "note": entry.get("note") or "",
@@ -747,10 +767,17 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
             "sample_start": start, "sample_end": end,
             "file_duration": entry.get("file_duration") or entry.get("duration"),
             "segments": entry.get("segments") or [],
+            "combined": combined,
+            "focused": focused,
         }
 
     ref = refs.get(chosen) or {}
     ref_text = str(ref.get("text") or "")
+    local = combined.get("local") or {}
+    passage = (focus == "matched" and bool(local) and local.get("reference") == chosen
+               and bool(ref_text))
+    if passage:
+        ref_text = spanmatch.reference_passage(ref_text, local)
     matches = episode_match(series)
     contains, shared, ranked, diff = None, [], [], None
     # Two codes filed under the same text (the usual Beavis/Gumball double-episode
@@ -766,6 +793,8 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
         codes = [c for c in eps if c in refs]
         if len(query) >= textsim.BIGRAM_FLOOR:
             grams = {c: ref_grams.get(c) or set() for c in codes}
+            if passage:
+                grams[chosen] = textsim.bigrams(ref_text)
             pairs = sorted(((textsim.containment(query, grams[c]), c) for c in codes), reverse=True)
             ranked = [{"code": c, "title": (eps.get(c) or {}).get("title") or "",
                        "containment": round(v, 4)} for v, c in pairs[:6]]
@@ -782,7 +811,7 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
         "code": chosen,
         "reference": ({"code": chosen, "title": (eps.get(chosen) or {}).get("title") or "",
                        "source": ref.get("source") or "", "words": len(ref_text.split()),
-                       "text": ref_text} if ref_text else None),
+                       "text": ref_text, "passage": bool(passage)} if ref_text else None),
         "episodes": [{"code": c, "title": (eps[c] or {}).get("title") or "", "has_ref": c in refs,
                       "match": matches.get(c)} for c in eps],
         "containment": contains,
@@ -1158,8 +1187,9 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
                                 "targets": (new or {}).get("targets") or []})
 
         chosen = after.get(source)
-        if (not chosen or chosen["kind"] not in ("rename", "split")
-                or chosen["kind"] != proposal.get("action", "rename")):
+        action = proposal.get("action", "rename")
+        required = {"rename": "rename", "split": "split", "keep": "ok"}.get(action)
+        if not chosen or not required or chosen["kind"] != required:
             raise HTTPException(409, "The proposal no longer produces the expected file change.")
         if chosen["kind"] == "split":
             segments = chosen["segments"]
@@ -1176,11 +1206,11 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
             if ((scanned.get("size") is not None and scanned["size"] != stats[0][1])
                     or (scanned.get("mtime_ns") is not None and scanned["mtime_ns"] != stats[0][2])):
                 raise HTTPException(409, "The source has changed since its scan. Scan it again.")
-            if any(safe_media_path(root / t["path"]).exists() for t in chosen["targets"]):
+            if any(safe_media_path(root / t["path"]).exists() for t in chosen.get("targets") or []):
                 raise HTTPException(409, "A destination already exists. Review the files together.")
         except (OSError, ValueError) as e:
             raise HTTPException(409, "The source file changed. Scan it again.") from e
-        chosen["selected"] = True
+        chosen["selected"] = action != "keep"
         token = hashlib.sha256(json.dumps([plan, options, rows, stats], sort_keys=True).encode()).hexdigest()
         return token, proposal, changed, options, rows, sid, scan["id"]
 

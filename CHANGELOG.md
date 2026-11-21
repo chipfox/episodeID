@@ -6,6 +6,11 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Match a passage, not the size of the reference.** Ordered dialogue anchors
+  show the part of an oversized subtitle that explains the file. Compare opens
+  on that passage and can search just the remaining video dialogue. An
+  independently labeled reference or full title card can settle a single file;
+  strong but unlabeled matches can offer a manual, no-move Keep filename review.
 - **Match combined subtitles by independently labeled spans, not their
   midpoint.** A partial or unverified match explains what is known without
   relabeling the whole video. Complete labels in a different order or filename

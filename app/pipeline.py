@@ -15,6 +15,7 @@ from .executor import (apply_plan, migrate_legacy_backup, sonarr_rescan, sonarr_
 from .jobs import Cancelled, handler
 from .matcher import Matcher, classify, parse_filename_episodes, promote
 from . import summary as summary_match
+from . import spanmatch
 from .media_text import (cached_dialogue, detect_language, dialogue_text, duration, get_dialogue,
                          probe, sample_dialogue)
 from .planner import build_plan, list_videos
@@ -827,7 +828,7 @@ def job_scan(ctx, params):
         res["segments"] = promote(expected, res["segments"], _evidence(res),
                                   dlg["duration"])
         _discount_unreferenced(res["segments"], expected, dlg["duration"], refs)
-        _guard_combined_match(res, expected, dlg)
+        _guard_combined_match(res, expected, dlg, matcher)
         if not (_evidence(res) or {}).get("combined"):
             res["segments"] = _story_parts(res["segments"], expected, eps, dlg["duration"])
         sampled = dlg.get("scope") == "sample"
@@ -879,6 +880,7 @@ def job_scan(ctx, params):
                         ctx.log(f"  summary {rel}: {sm['code']} {sm['score']:.2f}"
                                 f" (margin {sm['margin']:.2f})"
                                 + (" — auto" if sm.get("auto") else " — suggestion"))
+            _remaining_summaries(entry, dlg, summary_index)
         if lex is not None and len(expected) == 1 and status in ("NO_MATCH", "LOW_CONFIDENCE"):
             twins = lex.conflicting(expected[0])
             if twins:
@@ -913,6 +915,8 @@ def job_scan(ctx, params):
         elif reread_cards:
             ctx.log("Title cards: manual re-read checks every scanned file, including summary-confirmed files.")
         _titlecard_pass(series, cards, eps, ctx, reread=reread_cards)
+        for f in scanned:
+            _label_local_from_card(f)
         _title_card_swaps(scanned, ctx)
         for sw in reference_swaps(scanned, refs):
             ctx.log(f"References for {sw['codes'][0]} and {sw['codes'][1]} look swapped: title cards confirm each "
@@ -928,6 +932,14 @@ def job_scan(ctx, params):
         # this could not settle either.
         escalated = _full_escalation_pass(series, files, matcher, eps, refs, ctx, lex,
                                           videos_by_rel)
+        if summary_index:
+            for f in escalated:
+                if ((f.get("evidence") or {}).get("combined") or {}).get("remaining"):
+                    try:
+                        cached = cached_dialogue(videos_by_rel[f["rel"]]) or {}
+                    except OSError:
+                        continue
+                    _remaining_summaries(f, cached, summary_index)
         if escalated and llm.available():
             _llm_pass(series, escalated, eps, refs, ctx)
 
@@ -1043,18 +1055,39 @@ def _discount_unreferenced(segs: list[dict], expected: list[str], duration: floa
                       f"dialogue could only match other episodes — {sg['code']} was the closest")
 
 
-def _guard_combined_match(result: dict, expected: list[str], dialogue: dict) -> None:
+def _guard_combined_match(result: dict, expected: list[str], dialogue: dict, matcher=None) -> None:
     ev = _evidence(result)
     if ev is None:
         return
     segments = result["segments"]
     combined = ev.get("combined")
+    reference = ev.get("top1")
+    words = ev.get("words") or 0
+    oversized = (matcher and len(expected) == 1 and reference == expected[0] and words >= 120
+                 and len(matcher.refs.get(reference, "").split()) >= 1.7 * words
+                 and not any(sg.get("confidence") == "high" for sg in segments))
+    try_local = matcher and (oversized or (len(expected) > 1 and len(segments) < len(expected)))
     if not combined and (any(sg.get("broad_ref") for sg in segments)
                          or (len(expected) > 1 and len(segments) == 1
                              and segments[0].get("confidence") == "high")):
         combined = ev["combined"] = {"state": "unresolved", "reference": ev.get("top1")}
     if not combined:
-        return
+        if not try_local:
+            return
+        combined = {"state": "unresolved", "reference": reference}
+    if matcher and combined["state"] != "verified":
+        identified = spanmatch.inspect(matcher, result, dialogue, expected, combined)
+        if "local" in combined:
+            ev["combined"] = combined
+        if identified:
+            combined.update(state="verified", codes=[p["code"] for p in identified])
+            segments[:] = [{"code": p["code"], "start": p["start"], "end": p["end"],
+                            "confidence": "high", "score": p["file_coverage"], "words": p["pairs"],
+                            "alternatives": [], "evidence": "verified reference span", "why": ""}
+                           for p in identified]
+            ev["conflicted"] = False
+    if "combined" not in ev:
+        return  # no supported passage; keep the ordinary fallback
     if (combined["state"] == "verified"
             and (dialogue.get("scope") == "sample" or dialogue.get("language")
                  or not str(dialogue.get("source") or "").startswith(("embedded ", "remote ", "whisper "))
@@ -1065,6 +1098,45 @@ def _guard_combined_match(result: dict, expected: list[str], dialogue: dict) -> 
         ev["conflicted"] = True
         for sg in segments:
             sg["confidence"] = "low"
+
+
+def _label_local_from_card(f: dict) -> None:
+    """A full title read can name a whole-file dialogue match, not its neighbor."""
+    combined = (f.get("evidence") or {}).get("combined") or {}
+    local = combined.get("local") or {}
+    expected = f.get("expected") or []
+    duration = f.get("duration") or 0
+    if (combined.get("state") == "verified" or not local.get("whole_file") or len(expected) != 1
+            or f.get("scope") != "full" or f.get("language") or not duration
+            or not str(f.get("text_source") or "").startswith(("embedded ", "remote ", "whisper "))):
+        return
+    cards = [c for c in f.get("title_cards") or [] if c.get("code") and not c.get("partial")
+             and float(c.get("score") or 0) >= .85 and c.get("time") is not None]
+    if {c["code"] for c in cards} != set(expected) or not any(c["time"] <= duration * .25 for c in cards):
+        return
+    code = expected[0]
+    local["code"] = code
+    combined.update(state="verified", codes=[code])
+    f["evidence"]["conflicted"] = False
+    f["segments"] = [{"code": code, "start": local["start"], "end": local["end"],
+                      "score": local["file_coverage"], "confidence": "high", "alternatives": [],
+                      "title_card": min(cards, key=lambda c: c["time"]), "words": local["pairs"],
+                      "evidence": "title and local dialogue", "why": ""}]
+    f["status"], f["note"] = "OK", "Full title card names the matched file dialogue"
+
+
+def _remaining_summaries(f: dict, dialogue: dict, index) -> None:
+    for gap in (((f.get("evidence") or {}).get("combined") or {}).get("remaining") or []):
+        if gap.get("code") or gap.get("candidate"):
+            continue
+        text = " ".join(t for a, b, t in dialogue.get("cues") or [] if a >= gap["start"] and b <= gap["end"])
+        # Summary evidence here only helps the user locate the second part; it
+        # never fills in an episode code or changes a file by itself.
+        known = ((f.get("evidence") or {}).get("combined") or {}).get("local", {}).get("code")
+        if len(text.split()) >= 80:
+            scores = sorted(((v, c) for c, v in index.score(text).items() if c != known), reverse=True)
+            if scores and scores[0][0] >= .20 and (len(scores) == 1 or scores[0][0] - scores[1][0] >= .05):
+                gap["summary_candidate"] = scores[0][1]
 
 
 def _release_name_pass(series: dict, files: list[dict], ctx) -> None:
@@ -1933,7 +2005,7 @@ def _full_escalation_pass(series, files, matcher, eps, refs, ctx, lex, videos_by
                                   _evidence(res), dlg["duration"])
         _discount_unreferenced(res["segments"], f.get("expected") or [], dlg["duration"],
                                refs or {})
-        _guard_combined_match(res, f.get("expected") or [], dlg)
+        _guard_combined_match(res, f.get("expected") or [], dlg, matcher)
         if not (_evidence(res) or {}).get("combined"):
             res["segments"] = _story_parts(res["segments"], f.get("expected") or [], eps,
                                            dlg["duration"])

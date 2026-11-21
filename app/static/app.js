@@ -844,15 +844,16 @@ async function tabPlan(reload = true, searchOnly = false) {
     try {
       const { token, proposal, changes } = await api(url, { method: "POST", body: {} });
       if (!b.isConnected || state.series?.id !== sid) return;
-      const box = modal(`<h2>Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}</h2>
+      const keep = proposal.action === "keep";
+      const box = modal(`<h2>${keep ? "Keep filename as " : `Review ${esc(proposal.action || "rename")} to `}${esc(proposal.codes.join(" + "))}</h2>
         <p>${esc(proposal.reason)}</p>
         <ul>${changes.map((c) => `<li>${esc(c.source)}: ${esc(c.before || "—")} → ${esc(c.after || "—")}
           ${c.reason ? `<div class="muted small">${esc(c.reason)}</div>` : ""}
           ${c.approximate_cuts?.length ? `<div class="small">Approximate cut: ${c.approximate_cuts.map(fmtCut).join(", ")}</div>` : ""}
           ${(c.targets || []).map((t) => `<div class="path">↳ ${esc(t.path)}</div>`).join("")}</li>`).join("")}</ul>
-        <p>Stage this decision in the draft. No files move until you choose Apply.</p>
+        <p>${keep ? "Save your episode decision. This does not change the filename." : "Stage this decision in the draft. No files move until you choose Apply."}</p>
         <div class="row"><div class="spacer"></div><button class="btn" id="proposal-cancel">Cancel</button>
-          <button class="btn primary" id="proposal-stage">Stage decision</button></div>`);
+          <button class="btn primary" id="proposal-stage">${keep ? "Confirm label" : "Stage decision"}</button></div>`);
       $("#proposal-cancel", box).onclick = closeModal;
       const stage = $("#proposal-stage", box);
       stage.onclick = async () => {
@@ -862,15 +863,15 @@ async function tabPlan(reload = true, searchOnly = false) {
           if (!stage.isConnected || state.series?.id !== sid) return;
           state.plan = staged;
           closeModal();
-          state.filter = "actions";
+          state.filter = keep ? "ok" : "actions";
           history.replaceState({ series: state.series.id, tab: "plan", filter: state.filter }, "", seriesHash("plan", state.filter));
           tabPlan(false);
-          toast("Decision staged. No files were moved.");
+          toast(keep ? "Episode label confirmed. No files were moved." : "Decision staged. No files were moved.");
         } catch (e) { fail(e); }
       };
     } catch (e) { fail(e); }
   });
-  $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code));
+  $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code, b.dataset.focus));
   $$("button.card-check", tab).forEach((b) => b.onclick = () => cardCheckDialog(b.dataset.src));
   $$("button.rescan", tab).forEach((b) => b.onclick = () => {
     startJob("scan", { only: [b.dataset.src], full: true });
@@ -1266,18 +1267,18 @@ async function checkFilesDialog() {
 // person can read the two and settle a doubtful match themselves.
 
 const evMeta = (f) => {
-  const where = f.scope === "full" ? "whole file"
+  const where = f.focused ? `${fmtTime(f.focused.start)}–${fmtTime(f.focused.end)}` : f.scope === "full" ? "whole file"
     : f.sample_start != null
       ? `${f.scope === "excerpt" ? "excerpt of sample" : "sample"} ${fmtTime(f.sample_start)}–${fmtTime(f.sample_end)}`
       : f.scope;
   return `${where} · ${f.words} words`;
 };
 
-async function evidenceDialog(rel, code) {
+async function evidenceDialog(rel, code, focus = "") {
   let d;
   try {
     d = await api(`/api/series/${state.series.id}/evidence?` +
-      new URLSearchParams({ rel, ...(code ? { code } : {}) }));
+      new URLSearchParams({ rel, code: code || "", focus }));
   } catch (e) { fail(e); return; }
   const f = d.file;
   const sampled = f.scan_scope === "sample" && f.scope === "full";
@@ -1289,6 +1290,7 @@ async function evidenceDialog(rel, code) {
     <div class="row small" style="margin:6px 0 10px">
       ${f.status ? `<span class="badge ${STATUS_BADGE[f.status] || ""}" title="${esc(f.note)}">${esc(f.status)}</span>` : ""}
       <span class="muted">${esc(f.note || "")}</span></div>
+    <div id="ev-focus" class="wrap-row"></div>
     <div class="ev-grid">
       <div class="ev-col"><div class="ev-head"><b>File dialogue</b>
         <span class="muted small">${esc(evMeta(f))}</span></div>
@@ -1321,9 +1323,16 @@ async function evidenceDialog(rel, code) {
       .filter((e) => e.code === pickCode(e.code))
       .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.has_ref ? refName(e.code) : e.code + (e.title ? " " + e.title : "") + " (no reference)")}${e.match && group(e.code).length <= 1 ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
     const r = next.reference;
+    const local = next.file.combined?.local;
+    const gaps = next.file.combined?.remaining || [];
+    const focusNav = $("#ev-focus", box);
+    focusNav.innerHTML = local ? `<button class="btn small" data-focus="matched">Matched passage</button>
+      ${gaps.map((g, i) => `<button class="btn small" data-focus="remaining" data-part="${i}">${g.code ? esc(g.code) : "Review"} ${fmtTime(g.start)}–${fmtTime(g.end)}${g.candidate || g.summary_candidate ? ` · ${esc(g.candidate || g.summary_candidate)}?` : ""}</button>`).join("")}
+      <button class="btn small" data-focus="whole">Whole file &amp; reference</button>` : "";
+    $$("button", focusNav).forEach(b => b.onclick = () => load("", b.dataset.focus, b.dataset.part || "0"));
     const m = next.episodes.find((e) => e.code === next.code)?.match;
     $("#ev-ref-meta", box).textContent = r
-      ? `${r.source} · ${r.words} words${m ? ` · scan match ${m.score.toFixed(3)} (${m.confidence || "?"})` : ""}`
+      ? `${r.source} · ${r.words} words${r.passage ? " · matched passage" : ""}${m ? ` · scan match ${m.score.toFixed(3)} (${m.confidence || "?"})` : ""}`
       : "";
     const body = $("#ev-body", box);
     const diff = next.file.text && r ? next.diff : null;
@@ -1388,10 +1397,13 @@ async function evidenceDialog(rel, code) {
     $("#ev-score", box).innerHTML = lines.join("");
     $$(".ev-switch", box).forEach((b) => b.onclick = () => load(b.dataset.code));
   };
-  const load = async (c) => {
+  let request = 0;
+  const load = async (c, nextFocus = "", part = "0") => {
+    const id = ++request;
     try {
-      fill(await api(`/api/series/${state.series.id}/evidence?` +
-        new URLSearchParams({ rel, ...(c ? { code: c } : {}) })));
+      const result = await api(`/api/series/${state.series.id}/evidence?` +
+        new URLSearchParams({ rel, code: c, focus: nextFocus, part }));
+      if (id === request && box.isConnected) fill(result);
     } catch (e) { fail(e); }
   };
   pick.onchange = () => load(pick.value);
@@ -1427,6 +1439,7 @@ function methodsHtml(methods) {
 
 function rowHtml(it, eps, applied) {
   const proposal = applied ? null : it.proposal;
+  const local = it.combined?.local;
   const targets = (it.targets || []).map((t) =>
     `<div class="arrow">↳ <span class="path">${esc(t.path.replace(/^(\.\.\/)+/, ""))}</span>${t.duplicate ? ' <span class="badge b-bad">duplicate</span>' : ""}</div>`).join("");
   const segs = (it.segments || []).map((sg) => segHtml(sg, eps)).join("") ||
@@ -1455,10 +1468,10 @@ function rowHtml(it, eps, applied) {
       ${it.kind === "split" && it.cuts ? `<div class="small" style="margin-top:2px"><span class="badge b-info">cut points chosen</span>
         ${it.cuts.map((c) => c == null ? "auto" : fmtCut(c)).join(", ")}</div>` : ""}
       <div class="muted small">${esc(it.reason || "")}</div></td>
-    <td>${segs}${src}</td>
+    <td>${local ? `<div class="small"><b>${local.code ? esc(local.code) + " · " : ""}Dialogue ${fmtTime(local.start)}–${fmtTime(local.end)}</b> · ${Math.round(local.coverage * 100)}% ordered match</div>` : ""}${segs}${src}</td>
     <td class="detect-cell">${methodsHtml(it.methods)}</td>
-    <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare</button>` : ""}
-      ${proposal ? `<button class="btn small evi-apply" data-id="${it.id}" title="${esc(proposal.reason)}">Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}</button>` : ""}
+    <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc(local?.reference || (it.codes || it.suggested || it.expected || [])[0] || "")}" data-focus="${local ? "matched" : ""}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">${local ? "Compare passage" : "Compare"}</button>` : ""}
+      ${proposal ? `<button class="btn small evi-apply" data-id="${it.id}" title="${esc(proposal.reason)}">${proposal.action === "keep" ? "Keep filename…" : `Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}`}</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
