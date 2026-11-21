@@ -1,7 +1,8 @@
 """Find a plausible single-episode subtitle for human review, not auto-labeling."""
 from .matcher import EP_RE, EP_X_RE, parse_filename_episodes
 from .media_text import parse_subtitle_text
-from .references import _same_series, ep_code, name_check, subtitle_names
+from .references import DUPLICATE_REFERENCE_SIMILARITY, _same_series, ep_code, name_check, reference_grams, subtitle_names
+from .textsim import BIGRAM_FLOOR, bigrams
 
 
 def find(client, series, episode):
@@ -32,6 +33,7 @@ def find(client, series, episode):
             candidates.append((a.get("download_count") or 0, files[0]["file_id"], release))
     if not candidates:
         return None
+    _, known = reference_grams(series["tvdb_id"])
     client.login()
     seen = set()
     for _, fid, release in sorted(candidates, reverse=True):
@@ -47,5 +49,13 @@ def find(client, series, episode):
         start, end = min(c.start for c in cues), max(c.end for c in cues)
         runtime = minutes * 60
         if start <= .22 * runtime and .60 * runtime <= end <= 1.18 * runtime and end - start >= .55 * runtime:
+            grams = bigrams(" ".join(c.text for c in cues))
+            # Shared text with a larger combined reference is expected. Reject
+            # another code's near-identical transcript, not simple containment.
+            if len(grams) >= BIGRAM_FLOOR and any(
+                other != code and len(grams & g) >= DUPLICATE_REFERENCE_SIMILARITY * max(len(grams), len(g))
+                for other, g in known.items()
+            ):
+                continue
             return {"release": release, "duration": round(end, 1), "text": raw}
     return None

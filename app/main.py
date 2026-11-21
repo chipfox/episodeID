@@ -19,7 +19,7 @@ from . import integrity, pipeline, redownload  # noqa: F401  (registers job hand
 from . import summary as summary_match
 from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, language_choices,
                      public_settings, safe_media_path, save_settings)
-from .references import (OpenSubtitles, QuotaExhausted, clear_reference, ep_code, load_refs, manual_dir,
+from .references import (OpenSubtitles, OpenSubtitlesAuthError, QuotaExhausted, clear_reference, ep_code, load_refs, manual_dir,
                          reference_grams, twin_groups)
 from .views import best_dialogue, episode_match, series_out
 from .media_text import VIDEO_EXTS, cached_dialogue, dialogue_text
@@ -667,6 +667,8 @@ def reference_candidate(sid: int, code: str):
         return {"candidate": find(client, s, episode)}
     except QuotaExhausted as e:
         raise HTTPException(429, "OpenSubtitles download quota exhausted.") from e
+    except OpenSubtitlesAuthError as e:
+        raise HTTPException(502, "OpenSubtitles rejected the credentials. Check Settings → OpenSubtitles.") from e
     except (RuntimeError, httpx.HTTPError) as e:
         raise HTTPException(502, "OpenSubtitles search or download failed. Try again later.") from e
     finally:
