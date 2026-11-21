@@ -873,6 +873,10 @@ async function tabPlan(reload = true, searchOnly = false) {
   });
   $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code, b.dataset.focus));
   $$("button.card-check", tab).forEach((b) => b.onclick = () => cardCheckDialog(b.dataset.src));
+  $$("button.reread-card", tab).forEach((b) => b.onclick = () => {
+    startJob("scan", { only: [b.dataset.src], full: true, reread_cards: true });
+    toast("Re-reading title cards for this file.");
+  });
   $$("button.rescan", tab).forEach((b) => b.onclick = () => {
     startJob("scan", { only: [b.dataset.src], full: true });
     toast("Re-reading the whole file — the plan updates when it finishes.");
@@ -1359,9 +1363,12 @@ async function evidenceDialog(rel, code, focus = "") {
     }
     const lines = [];
     const nf = next.file;
+    if (nf.combined?.chapters?.length) {
+      lines.push(`<div class="muted small">Chapter starts (boundary hints only): ${nf.combined.chapters.map(fmtTime).join(" · ")}</div>`);
+    }
     if (!r && next.file) {
       lines.push(`<div class="ev-warn"><b>${esc(next.code || "This episode")}</b> has no reference transcript — ` +
-        `nothing to compare. Fetch or paste one in Episodes &amp; references.</div>`);
+        `nothing to compare. ${titles[next.code] != null ? `<button class="btn small ev-paste">Find or paste a reference…</button>` : ""}</div>`);
     }
     if (next.containment != null) {
       // Measured on this library: an episode's own reference contains 0.70-0.94 of a
@@ -1396,6 +1403,8 @@ async function evidenceDialog(rel, code, focus = "") {
         `<button class="btn small ev-switch" data-code="${esc(r2.code)}" title="${esc(r2.title || r2.code)}">${esc(r2.code)} ${(r2.containment * 100).toFixed(0)}%</button>`).join(" ")}</div>`);
     }
     $("#ev-score", box).innerHTML = lines.join("");
+    const paste = $(".ev-paste", box);
+    if (paste) paste.onclick = () => { closeModal(); pasteRefDialog(next.code, titles[next.code]); };
     $$(".ev-switch", box).forEach((b) => b.onclick = () => load(b.dataset.code));
   };
   let request = 0;
@@ -1472,13 +1481,14 @@ function rowHtml(it, eps, applied) {
       <div class="muted small">${esc(it.reason || "")}</div></td>
     <td>${local ? `<div class="small"><b>${local.code ? esc(local.code) + " · " : ""}Dialogue ${fmtTime(local.start)}–${fmtTime(local.end)}</b> · ${Math.round(local.coverage * 100)}% ordered match</div>` : ""}${segs}${src}</td>
     <td class="detect-cell">${methodsHtml(it.methods)}</td>
-    <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc(local?.reference || (it.codes || it.suggested || it.expected || [])[0] || "")}" data-focus="${local ? "matched" : ""}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">${local ? "Compare passage" : "Compare"}</button>` : ""}
+    <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc(local?.reference || it.codes?.[0] || (it.summary_match?.passes && it.summary_match.mode !== "off" ? it.summary_match.code : "") || it.suggested?.[0] || it.expected?.[0] || "")}" data-focus="${local ? "matched" : ""}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">${local ? "Compare passage" : "Compare"}</button>` : ""}
       ${proposal ? `<button class="btn small evi-apply" data-id="${it.id}" title="${esc(proposal.reason)}">${proposal.action === "aside" ? "Review audio duplicate…" : proposal.action === "keep" ? "Keep filename…" : `Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}`}</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
         ${ovr || it.confirmed_on ? `<button class="btn small clear-ov" data-src="${esc(it.source)}">${it.confirmed_on ? "Revoke confirmation" : "Clear episode override"}</button>` : ""}`}
         <button class="btn small card-check" data-src="${esc(it.source)}" title="See what the title-card OCR reads in part of this file">Check title cards…</button>
+        ${!applied && it.kind === "review" && it.combined?.remaining?.length ? `<button class="btn small reread-card" data-src="${esc(it.source)}">Rescan with title cards</button>` : ""}
         ${state.ai && !applied && it.kind !== "ok" && it.text_source && it.text_source !== "none" ? `<button class="btn small ai-check" data-src="${esc(it.source)}" title="Ask the AI which episode this file's dialogue is, from the TVDB summaries of the likely episodes">Ask AI</button>` : ""}
         ${it.kind === "review" && it.sample && !applied ? `<button class="btn small full-scan" data-src="${esc(it.source)}" title="Transcribe and match the whole file — settles it with every line, not just the sample windows">Full-file match</button>` : ""}
         ${it.kind === "split" && !applied ? `<button class="btn small cut-pick" data-iid="${it.id}" title="See where this file would be split, with pictures, and choose">Choose cut points…</button>` : ""}
@@ -1873,6 +1883,7 @@ function pasteRefDialog(code, title) {
       It replaces any reference this episode already has.</p>
     <textarea id="pr-text" style="width:100%;height:45vh;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font:13px/1.4 ui-monospace,monospace" placeholder="Paste here…"></textarea>
     <div class="row" style="margin-top:12px"><span class="small muted" id="pr-out"></span><div class="spacer"></div>
+      <button class="btn" id="pr-find">Find single-episode subtitle…</button>
       <button class="btn" id="pr-c">Cancel</button><button class="btn primary" id="pr-go" disabled>Save reference</button></div>`, { sticky: true });
   $("#modal-box").style.width = "min(900px, 100%)";
   const ta = $("#pr-text", box);
@@ -1880,13 +1891,30 @@ function pasteRefDialog(code, title) {
   ta.oninput = () => { const n = words(); $("#pr-out", box).textContent = n ? `${n} words` : ""; $("#pr-go", box).disabled = n < 30; };
   $("#pr-x", box).onclick = closeModal;
   $("#pr-c", box).onclick = closeModal;
+  const find = $("#pr-find", box);
+  find.onclick = async () => {
+    if (ta.value.trim() && !window.confirm("Replace the text in this preview?")) return;
+    const output = $("#pr-out", box);
+    find.disabled = true;
+    output.textContent = "Searching OpenSubtitles…";
+    try {
+      const { candidate } = await api(`/api/series/${s.id}/references/${code}/candidate`, { method: "POST", body: {} });
+      if (candidate) {
+        ta.value = candidate.text;
+        ta.oninput();
+        output.textContent = `${candidate.release} · ${fmtTime(candidate.duration)} of subtitles. Check that it contains only ${code} before saving.`;
+      } else output.textContent = "No single-episode subtitle passed the title and runtime checks. Nothing saved.";
+    } catch (e) { output.textContent = e.message; }
+    finally { find.disabled = false; }
+  };
   $("#pr-go", box).onclick = async () => {
     $("#pr-go", box).disabled = true;
     try {
       const r = await api(`/api/series/${s.id}/references/${code}/text`, { method: "POST", body: { text: ta.value } });
       closeModal();
       toast(`Saved as a ${r.format} for ${code} (${r.words} words of dialogue)` + (r.warning ? ` — ${r.warning}` : ""), r.warning ? 8000 : 4000);
-      state.series = await api(`/api/series/${s.id}`); tabEpisodes();
+      state.series = await api(`/api/series/${s.id}`);
+      if (state.tab === "episodes") tabEpisodes(); else tabPlan();
     } catch (e) { $("#pr-out", box).textContent = e.message; $("#pr-go", box).disabled = false; }
   };
   ta.focus();

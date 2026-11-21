@@ -231,6 +231,18 @@ def duration(info: dict) -> float:
         return 0.0
 
 
+def chapter_hints(path: Path, runtime: float) -> list[float]:
+    """Bounded, display-only boundary hints; never feed chapter data to matching."""
+    try:
+        result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "chapter=start_time",
+                                 "-of", "json", str(path)], capture_output=True, timeout=5, check=True)
+        chapters = json.loads(result.stdout).get("chapters") or []
+        starts = {round(float(ch["start_time"]), 1) for ch in chapters if "start_time" in ch}
+        return sorted(t for t in starts if 5 <= t <= runtime - 5)[:12]
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        return []
+
+
 def _lang_ok(stream: dict, lang: str, allow_untagged: bool = True) -> bool:
     tag = ((stream.get("tags") or {}).get("language") or "").lower()
     if not lang:

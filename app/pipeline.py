@@ -16,7 +16,7 @@ from .jobs import Cancelled, handler
 from .matcher import Matcher, classify, parse_filename_episodes, promote
 from . import summary as summary_match
 from . import spanmatch
-from .media_text import (cached_dialogue, detect_language, dialogue_text, duration, get_dialogue,
+from .media_text import (cached_dialogue, chapter_hints, detect_language, dialogue_text, duration, get_dialogue,
                          probe, sample_dialogue)
 from .planner import build_plan, list_videos
 from .references import (SAME_EPISODE_SCORE, detect_fandom_wiki, ep_code, load_refs, norm_title,
@@ -942,6 +942,12 @@ def job_scan(ctx, params):
                     _remaining_summaries(f, cached, summary_index)
         if escalated and llm.available():
             _llm_pass(series, escalated, eps, refs, ctx)
+
+    for f in files:
+        combined = (f.get("evidence") or {}).get("combined") or {}
+        if combined and combined["state"] != "verified" and len(f.get("expected") or []) > 1:
+            ctx.check_cancel()
+            combined["chapters"] = chapter_hints(videos_by_rel[f["rel"]], f.get("duration") or 0)
 
     if params.get("only"):
         # Only some files were scanned: the rest keep what the last scan found (if they're

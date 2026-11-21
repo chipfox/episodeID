@@ -6,6 +6,10 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Find better references from a review.** Compare can open a summary suggestion
+  and link directly to the reference editor. Search for a subtitle whose release
+  name and timings fit one episode, then preview it before saving. Unresolved
+  passages offer a targeted title-card rescan; chapter starts are hints only.
 - **Remember verified Keep filename decisions.** A confirmation survives rescans
   only while the same file, full dialogue, duration and reference are unchanged.
   Revoke it from the row menu. Nothing propagates silently to another encode.

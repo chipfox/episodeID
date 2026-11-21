@@ -19,7 +19,7 @@ from . import integrity, pipeline, redownload  # noqa: F401  (registers job hand
 from . import summary as summary_match
 from .config import (CACHE_DIR, MEDIA_ROOT, env_locked_keys, get_settings, language_choices,
                      public_settings, safe_media_path, save_settings)
-from .references import (OpenSubtitles, clear_reference, ep_code, load_refs, manual_dir,
+from .references import (OpenSubtitles, QuotaExhausted, clear_reference, ep_code, load_refs, manual_dir,
                          reference_grams, twin_groups)
 from .views import best_dialogue, episode_match, series_out
 from .media_text import VIDEO_EXTS, cached_dialogue, dialogue_text
@@ -649,6 +649,28 @@ async def upload_reference(sid: int, code: str, file: UploadFile = File(...)):
 
 class PastedRef(BaseModel):
     text: str
+
+
+@app.post("/api/series/{sid}/references/{code}/candidate")
+def reference_candidate(sid: int, code: str):
+    from .anchor_candidates import find
+    s = db.get_series(sid) or _404()
+    episode = next((e for e in s["episodes"] if ep_code(e["season"], e["episode"]) == code), None)
+    if not episode:
+        _404()
+    if db.active_job(sid):
+        raise HTTPException(409, "Wait for the current job before searching for a subtitle.")
+    client = OpenSubtitles()
+    try:
+        if not client.configured:
+            raise HTTPException(400, "Configure OpenSubtitles before searching for a release.")
+        return {"candidate": find(client, s, episode)}
+    except QuotaExhausted as e:
+        raise HTTPException(429, "OpenSubtitles download quota exhausted.") from e
+    except (RuntimeError, httpx.HTTPError) as e:
+        raise HTTPException(502, "OpenSubtitles search or download failed. Try again later.") from e
+    finally:
+        client.close()
 
 
 @app.post("/api/series/{sid}/references/{code}/text")
