@@ -10,7 +10,7 @@ os.environ.update(MEDIA_ROOT=str(W / "media"), CONFIG_DIR=str(W / "config"), CAC
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient  # noqa: E402
-from app import db, fingerprints, main  # noqa: E402
+from app import db, fingerprints, main, pipeline  # noqa: E402
 from app.planner import build_plan, probe_audio_pairs  # noqa: E402
 
 root = W / "media" / "Show"
@@ -65,6 +65,8 @@ assert initial[0]["kind"] == "review" and initial[0]["audio_candidate"] == rival
 
 
 class Context:
+    series_id = sid
+
     def check_cancel(self):
         pass
 
@@ -75,6 +77,11 @@ with patch("app.fingerprints.compare", return_value="equivalent") as probe:
     probe.assert_called_once_with(root, a, b, check_cancel=ctx.check_cancel)
     plan = build_plan(series, scan)
     assert probe.call_count == 1  # rebuilding the plan does not decode media
+    assert not probe_audio_pairs(root, initial, [{**a, "mtime_ns": 1}, b], ctx)
+    assert probe.call_count == 1
+pair = scan["audio_pairs"][source]
+different = build_plan(series, {**scan, "audio_pairs": {source: {**pair, "result": "different"}}})[0]
+assert "No audio match" in different["reason"] and "proposal" not in different
 assert len([i for i in plan if i["kind"] == "review"]) == 1
 assert plan[0]["proposal"]["action"] == "aside" and not plan[0]["selected"]
 sid_scan = db.add_scan(sid, scan)
@@ -90,9 +97,22 @@ staged = next(i for i in done.json()["items"] if i["source"] == source)
 assert staged["kind"] == "aside" and staged["selected"] and staged["audio_pair"]["rival"] == rival
 assert "overrides" not in db.get_series(sid)["options"]
 assert all((root / name).is_file() for name in (source, rival)) and not db.list_applies(sid)
+params = {"plan_id": done.json()["id"]}
+with patch.object(pipeline, "apply_plan", return_value={"applied": 0}) as executor, \
+        patch.object(pipeline.autocheck, "record"):
+    pipeline.job_apply(ctx, params)
+    executor.assert_called_once()
 
 # No approval on a replaced keeper; no proposal if a filename claims an unproved extra part.
 (root / rival).write_bytes(b"replacement")
+with patch.object(pipeline, "apply_plan") as executor:
+    try:
+        pipeline.job_apply(ctx, params)
+    except RuntimeError as e:
+        assert "reviewed audio duplicate changed" in str(e)
+    else:
+        raise AssertionError("stale audio match did not block Apply")
+    executor.assert_not_called()
 assert next(i for i in build_plan(db.get_series(sid), scan) if i["source"] == source)["kind"] == "review"
 a["expected"].append("S01E02")
 assert not any(i.get("audio_candidate") for i in build_plan(series, scan))

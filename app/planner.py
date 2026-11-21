@@ -661,7 +661,7 @@ def audio_pair_current(root: Path, source: str, pair: dict) -> bool:
 
 
 def probe_audio_pairs(root: Path, items: list[dict], files: list[dict], ctx) -> dict:
-    """Only a scan job decodes audio; plan fetch and approval just check identities."""
+    """Only a scan job decodes audio; planner rebuilds and approval only check identities."""
     from .fingerprints import compare
 
     by_rel = {f["rel"]: f for f in files}
@@ -1565,7 +1565,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     for it in items:
         rival = it.pop("audio_candidate", None)
         other = by_rel.get(rival)
-        if (it["kind"] != "review" or not other or other["kind"] != "ok"
+        if (it["kind"] != "review" or it.get("claimed_by") or not other or other["kind"] != "ok"
                 or (other.get("sample") and len(it["expected"]) != 1)
                 or it["duration_check"]["state"] in ("warn", "fail")
                 or any((meta.get(c) or {}).get("low_trust") for c in it["expected"])):
@@ -1585,7 +1585,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                           reason=f"Reviewed audio match — keep {rival}",
                           targets=[{"path": f"{backup}/duplicates/{it['source']}"}])
             else:
-                it["reason"] = f"Sampled audio matches {rival}. Review both versions together."
+                it["reason"] += f". Sampled audio matches {rival}; review both versions together."
                 it["proposal"] = {"codes": it["expected"], "action": "aside",
                                   "reason": f"Keep {rival} in place and stage this copy for the duplicates folder. Audio does not verify the episode label."}
 
