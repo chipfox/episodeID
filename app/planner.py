@@ -1226,11 +1226,16 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             rivals = {winner[c[1]][0] for c in usable}
             rival = files_by_rel.get(next(iter(rivals))) if len(rivals) == 1 else None
             relation = _same_code_relation(root, f, rival)
+            # Overlapping dialogue cannot prove that a multi-episode filename's
+            # unaccounted-for episodes are safe to drop, even when both texts agree.
+            if relation == "duplicate" and len(base["expected"]) > 1 and set(codes) != set(base["expected"]):
+                relation = "incomplete"
             if relation != "duplicate":
                 detail = {
                     "unknown": "the two dialogues could not be compared",
                     "partial": "the files have partial dialogue overlap, not equivalent content",
                     "different": "the files have different dialogue and may be complementary",
+                    "incomplete": "the dialogue agrees, but not all episodes in this filename are accounted for",
                 }[relation]
                 items.append({**base, "kind": "review",
                                 "reason": f"Another file also matches {', '.join(codes)}: "

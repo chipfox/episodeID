@@ -61,6 +61,14 @@ r = rows(scan_file("Long.mkv", HALF_A + " " + HALF_B), scan_file("Short.mkv", HA
 assert r["Season 1/Short.mkv"]["kind"] == "review", r
 assert "partial dialogue overlap" in r["Season 1/Short.mkv"]["reason"], r
 
+# Even equivalent transcripts don't justify moving a multi-episode file when
+# the matcher only assigned one of the named episodes.
+double = scan_file("Unaccounted double.mkv", HALF_A, score=.79)
+double["expected"] = ["S01E01", "S01E02"]
+r = rows(scan_file("Single.mkv", HALF_A), double)
+assert r[double["rel"]]["kind"] == "review", r
+assert "not all episodes" in r[double["rel"]]["reason"], r
+
 # Text missing: cannot tell a split from a copy, so do not move anything.
 r = rows(scan_file("Show - S01E01 - One.mkv", HALF_A, score=.80),
          scan_file("Show - S01E01 - Two.mkv", "", score=.79))
@@ -73,4 +81,4 @@ r = rows(scan_file("Show - S01E01 - One.mkv", HALF_A, score=.80),
                    score=.79))
 assert {it["kind"] for it in r.values()} == {"ok", "review"}, r
 
-print("same_episode_files_test: OK — 5 cases")
+print("same_episode_files_test: OK — 6 cases")
