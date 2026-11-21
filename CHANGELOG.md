@@ -6,6 +6,13 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Episode proposals have a read-only preview.** A weak candidate is not a
+  rename action. Approval stages the reviewed change without moving media;
+  stale previews are rejected, and existing selections are preserved.
+- **Compare competing files using cached full dialogue.** Check both directions
+  so a partial copy is not treated as equivalent content. Matching duplicates
+  are not preselected. Keep focus while filtering the plan and group identical
+  transcripts in the reference picker.
 - **One shared word can now pair a diff row — through containment only.**
   Sources drift at sentence boundaries: the ASR's "Then it would rule." is the
   reference's "Yeah, then it would rule!", but `would` is a stopword and the

@@ -1,6 +1,8 @@
 """EpisodeID web server."""
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
@@ -756,6 +758,8 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
     # the compare header both show every code that shares this exact text.
     groups = twin_groups(series["tvdb_id"])
     twins = [c for c in groups.get(chosen, []) if c != chosen]
+    exact = {c: [other for other in group if other in refs and refs[other]["text"] == refs[c]["text"]]
+             for c, group in groups.items() if c in refs}
     if file_out and file_out["text"] and refs:
         query = textsim.bigrams(file_out["text"])
         file_out["bigrams"] = len(query)
@@ -788,6 +792,7 @@ def evidence_view(sid: int, rel: str = "", code: str = ""):
         "diff": diff,
         "reference_twins": twins,
         "twin_groups": groups,
+        "exact_reference_groups": exact,
     }
 
 
@@ -1100,6 +1105,96 @@ def cut_save(pid: int, iid: int, body: Cuts):
 class Override(BaseModel):
     source: str
     codes: list[str] | None
+
+
+class ProposalApproval(BaseModel):
+    token: str | None = None
+
+
+@app.post("/api/plans/{pid}/items/{iid}/proposal")
+def proposal_action(pid: int, iid: int, body: ProposalApproval):
+    """Preview without writes; a matching token stages exactly the previewed plan."""
+    from .planner import ACTIONABLE, PLAN_VERSION, build_plan, sidecars
+
+    def draft():
+        plan = db.get_plan(pid) or _404()
+        sid = plan["series_id"]
+        series = db.get_series(sid) or _404()
+        latest = db.latest_plan(sid)
+        scan = db.latest_scan(sid)
+        if (plan["status"] != "draft" or not latest or latest["id"] != pid
+                or not scan or scan["id"] != plan["scan_id"] or db.active_job(sid)):
+            raise HTTPException(409, "The draft changed or a job is running. Reload the plan.")
+        item = next((it for it in plan["items"] if it["id"] == iid), None)
+        proposal = (item or {}).get("proposal")
+        if not proposal or item.get("pv") != PLAN_VERSION:
+            raise HTTPException(409, "This row has no current proposal. Reload the plan.")
+        source = item["source"]
+        options = dict(series["options"] or {})
+        options["overrides"] = {**(options.get("overrides") or {}), source: proposal["codes"]}
+        rows = build_plan({**series, "options": options}, scan["results"])
+
+        def changes(it):
+            return (it["kind"], it.get("sources") or [it["source"]], it.get("targets") or [])
+
+        before = {it["source"]: it for it in plan["items"]}
+        after = {it["source"]: it for it in rows}
+        changed = []
+        for rel in sorted(before.keys() | after.keys()):
+            old, new = before.get(rel), after.get(rel)
+            same = old and new and changes(old) == changes(new)
+            if same:
+                new["selected"] = old["selected"]
+                if old.get("cuts"):
+                    new["cuts"] = old["cuts"]
+            elif new:
+                new["selected"] = False
+            if rel == source or not same or old.get("reason") != new.get("reason"):
+                if rel != source and not same and ((old and old["kind"] in ACTIONABLE)
+                                                   or (new and new["kind"] in ACTIONABLE)):
+                    raise HTTPException(409, "This decision changes another file action. Review those files together.")
+                changed.append({"source": rel, "before": (old or {}).get("kind"),
+                                "after": (new or {}).get("kind"), "reason": (new or {}).get("reason"),
+                                "targets": (new or {}).get("targets") or []})
+
+        chosen = after.get(source)
+        if (not chosen or chosen["kind"] not in ("rename", "split")
+                or chosen["kind"] != proposal.get("action", "rename")):
+            raise HTTPException(409, "The proposal no longer produces the expected file change.")
+        root = Path(series["path"])
+        try:
+            video = safe_media_path(root / source)
+            paths = [video, *sorted(sidecars(video))]
+            stats = [(str(p), st.st_size, st.st_mtime_ns) for p in paths for st in (p.stat(),)]
+            scanned = next((f for f in scan["results"]["files"] if f["rel"] == source), {})
+            if ((scanned.get("size") is not None and scanned["size"] != stats[0][1])
+                    or (scanned.get("mtime_ns") is not None and scanned["mtime_ns"] != stats[0][2])):
+                raise HTTPException(409, "The source has changed since its scan. Scan it again.")
+            if any(safe_media_path(root / t["path"]).exists() for t in chosen["targets"]):
+                raise HTTPException(409, "A destination already exists. Review the files together.")
+        except (OSError, ValueError) as e:
+            raise HTTPException(409, "The source file changed. Scan it again.") from e
+        chosen["selected"] = True
+        token = hashlib.sha256(json.dumps([plan, options, rows, stats], sort_keys=True).encode()).hexdigest()
+        return token, proposal, changed, options, rows, sid, scan["id"]
+
+    if body.token is None:
+        token, proposal, changed, *_ = draft()
+        return {"token": token, "proposal": proposal, "changes": changed}
+
+    conn = db.conn()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        token, _proposal, _changed, options, rows, sid, scan_id = draft()
+        if body.token != token:
+            raise HTTPException(409, "The proposal changed. Preview it again before approving.")
+        db.update_series(sid, options=options)
+        new_id = db.add_plan(sid, scan_id, rows)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return db.get_plan(new_id)
 
 
 @app.post("/api/series/{sid}/overrides")

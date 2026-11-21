@@ -706,7 +706,7 @@ function segHtml(sg, eps) {
   return h + `</div>`;
 }
 
-async function tabPlan(reload = true) {
+async function tabPlan(reload = true, searchOnly = false) {
   if (reload || state.ai === undefined) {
     const st = await api("/api/status").catch(() => ({}));
     state.ai = !!st.llm; state.sonarr = !!st.sonarr;
@@ -752,14 +752,14 @@ async function tabPlan(reload = true) {
     : rescanCount ? `${rescanCount} row${rescanCount === 1 ? "" : "s"} checked, but none has a pending file change — use Rescan checked, or Rename to the episode the evidence points at`
     : "Tick a row with a pending change first";
 
-  tab.innerHTML = `<div class="plan-toolbar">
+  const markup = `<div class="plan-toolbar">
       <div class="filters">${filters.map(([k, l, n]) =>
         `<button class="btn small ${state.filter === k ? "active" : ""}" data-f="${k}">${l} <span class="count">${n}</span></button>`).join("")}</div>
       <label class="plan-search" title="Search filenames, episode codes and titles, evidence, and plan reasons">
         <span aria-hidden="true">⌕</span>
         <input id="plan-search" type="search" placeholder="Filter ${plan.items.length} files"
           value="${esc(state.planQuery || "")}" aria-label="Filter plan rows">
-        ${state.planQuery ? `<button type="button" id="plan-search-clear" aria-label="Clear filter">×</button>` : ""}
+        <button type="button" id="plan-search-clear" aria-label="Clear filter" ${state.planQuery ? "" : "hidden"}>×</button>
       </label>
       <div class="plan-toolbar-right">
         <span class="plan-meta" ${changedCount ? `title="Rows whose verdict differs from the plan before this scan — each carries a 'changed' chip with the old verdict"` : ""}>Plan #${plan.id} <span class="dot">·</span> ${timeTag(plan.created)}${changedCount ? ` <span class="badge b-info" title="${changedCount} rows whose verdict differs from the plan before this scan">${changedCount} verdicts changed</span>` : ""}${applied ? ` <span class="badge b-ok">applied</span>` : ""}</span>
@@ -790,16 +790,28 @@ async function tabPlan(reload = true) {
         ${q ? '<button class="btn small" id="clear-plan-search">Clear filter</button>' : ""}</div>`}
 `;
 
+  const toolbar = searchOnly && $(".plan-toolbar", tab);
+  if (toolbar) {
+    const fragment = document.createElement("template");
+    fragment.innerHTML = markup;
+    fragment.content.firstElementChild.remove();
+    while (toolbar.nextSibling) toolbar.nextSibling.remove();
+    tab.append(fragment.content);
+    $("#plan-search-clear", toolbar).hidden = !state.planQuery;
+  } else tab.innerHTML = markup;
+
   const runSearch = (value) => {
     state.planQuery = value;
-    tabPlan(false);
-    const next = $("#plan-search", tab);
-    if (next) { next.focus(); next.setSelectionRange(next.value.length, next.value.length); }
+    const search = $("#plan-search", tab);
+    if (search.value !== value) search.value = value;
+    tabPlan(false, true);
   };
   const search = $("#plan-search", tab);
   if (search) search.oninput = () => runSearch(search.value);
-  const clearSearch = $("#plan-search-clear", tab) || $("#clear-plan-search", tab);
-  if (clearSearch) clearSearch.onclick = () => runSearch("");
+  $$("#plan-search-clear, #clear-plan-search", tab).forEach((b) => b.onclick = () => {
+    runSearch("");
+    $("#plan-search", tab).focus();
+  });
   $$(".filters .btn", tab).forEach((b) => b.onclick = () => {
     state.filter = b.dataset.f;
     const hash = seriesHash("plan", state.filter);
@@ -827,21 +839,30 @@ async function tabPlan(reload = true) {
   syncAll($("#all-visible", tab));
   $$("button.set-ep", tab).forEach((b) => b.onclick = () => setEpisodeDialog(b.dataset.src, b.dataset.cur));
   $$("button.evi-apply", tab).forEach((b) => b.onclick = async () => {
-    // One click turns the row's evidence into a manual episode decision, then opens
-    // the normal Apply confirmation — exactly what ticking a rename row does, but the
-    // evidence is what set the episode, not a typed code.
-    const src = b.dataset.src, code = b.dataset.code;
+    const url = `/api/plans/${plan.id}/items/${b.dataset.id}/proposal`;
     try {
-      const p2 = await api(`/api/series/${state.series.id}/overrides`,
-        { method: "POST", body: { source: src, codes: [code] } });
-      state.plan = p2;
-      const rows = p2.items.filter((x) => x.selected && ACTIONABLE.includes(x.kind));
-      if (!rows.some((x) => x.source === src)) {
-        tabPlan();
-        toast(`Episode set to ${code}, but the plan still offers no change for this file — check the row.`);
-        return;
-      }
-      confirmApply(p2, rows);
+      const { token, proposal, changes } = await api(url, { method: "POST", body: {} });
+      const box = modal(`<h2>Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}</h2>
+        <p>${esc(proposal.reason)}</p>
+        <ul>${changes.map((c) => `<li>${esc(c.source)}: ${esc(c.before || "—")} → ${esc(c.after || "—")}
+          ${c.reason ? `<div class="muted small">${esc(c.reason)}</div>` : ""}
+          ${(c.targets || []).map((t) => `<div class="path">↳ ${esc(t.path)}</div>`).join("")}</li>`).join("")}</ul>
+        <p>Stage this decision in the draft. No files move until you choose Apply.</p>
+        <div class="row"><div class="spacer"></div><button class="btn" id="proposal-cancel">Cancel</button>
+          <button class="btn primary" id="proposal-stage">Stage decision</button></div>`);
+      $("#proposal-cancel", box).onclick = closeModal;
+      const stage = $("#proposal-stage", box);
+      stage.onclick = async () => {
+        stage.disabled = true;
+        try {
+          state.plan = await api(url, { method: "POST", body: { token } });
+          closeModal();
+          state.filter = "actions";
+          history.replaceState({ series: state.series.id, tab: "plan", filter: state.filter }, "", seriesHash("plan", state.filter));
+          tabPlan(false);
+          toast("Decision staged. No files were moved.");
+        } catch (e) { fail(e); }
+      };
     } catch (e) { fail(e); }
   });
   $$("button.evidence", tab).forEach((b) => b.onclick = () => evidenceDialog(b.dataset.src, b.dataset.code));
@@ -1284,15 +1305,16 @@ async function evidenceDialog(rel, code) {
   const fill = (next) => {
     // Every episode is selectable — including those with no reference, which say
     // so. Hiding them makes a picker switch that "does nothing" look broken.
-    // A subtitle shared by several codes is NAMED by all of them: one dropdown
-    // entry per code, each carrying the whole group, so the switch is visibly a
-    // no-op without any explanatory prose.
+    // Identical text needs one choice; similar but different edits remain selectable.
     const titles = {};
     next.episodes.forEach((e) => { titles[e.code] = e.title || ""; });
-    const refName = (c) => ((next.twin_groups || {})[c] || [c])
+    const group = (c) => (next.exact_reference_groups?.[c] || [c]).filter((x) => x in titles);
+    const pickCode = (c) => group(c).includes(next.code) ? next.code : group(c)[0] || c;
+    const refName = (c) => group(c)
       .map((x) => x + (titles[x] ? " " + titles[x] : "")).join(", ");
     pick.innerHTML = next.episodes
-      .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.has_ref ? refName(e.code) : e.code + (e.title ? " " + e.title : "") + " (no reference)")}${e.match ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
+      .filter((e) => e.code === pickCode(e.code))
+      .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.has_ref ? refName(e.code) : e.code + (e.title ? " " + e.title : "") + " (no reference)")}${e.match && group(e.code).length <= 1 ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
     const r = next.reference;
     const m = next.episodes.find((e) => e.code === next.code)?.match;
     $("#ev-ref-meta", box).textContent = r
@@ -1398,21 +1420,8 @@ function methodsHtml(methods) {
   }).join("")}</div>`;
 }
 
-// A review row whose evidence names exactly one episode the list has: the user can
-// apply that verdict as a rename in one click (manual override + normal Apply path,
-// which moves the file and its sidecar files). Rows already set by hand keep the
-// Set episode / Clear override controls instead.
-function evidenceApplyCode(it, eps) {
-  if (it.kind !== "review" || it.status === "MANUAL") return "";
-  const codes = it.suggested || [];
-  if (codes.length !== 1) return "";
-  const code = codes[0];
-  if (!eps[code] || (it.expected || []).includes(code)) return "";
-  return code;
-}
-
 function rowHtml(it, eps, applied) {
-  const evi = applied ? "" : evidenceApplyCode(it, eps);
+  const proposal = applied ? null : it.proposal;
   const targets = (it.targets || []).map((t) =>
     `<div class="arrow">↳ <span class="path">${esc(t.path.replace(/^(\.\.\/)+/, ""))}</span>${t.duplicate ? ' <span class="badge b-bad">duplicate</span>' : ""}</div>`).join("");
   const segs = (it.segments || []).map((sg) => segHtml(sg, eps)).join("") ||
@@ -1444,7 +1453,7 @@ function rowHtml(it, eps, applied) {
     <td>${segs}${src}</td>
     <td class="detect-cell">${methodsHtml(it.methods)}</td>
     <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc((it.codes || it.suggested || it.expected || [])[0] || "")}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">Compare</button>` : ""}
-      ${evi ? `<button class="btn small evi-apply" data-src="${esc(it.source)}" data-code="${esc(evi)}" title="The evidence points at ${esc(evi)} — set that episode and walk straight into Apply; the file and its sidecar files move together">Rename to ${esc(evi)}</button>` : ""}
+      ${proposal ? `<button class="btn small evi-apply" data-id="${it.id}" title="${esc(proposal.reason)}">Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>

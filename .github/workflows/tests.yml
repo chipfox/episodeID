@@ -31,8 +31,23 @@ jobs:
           for t in textsim settings_alias repair_marker db_retention evidence_view episode_scores \
                    mislabel_rename reference_duplicate_guard reference_swap full_escalation \
                    paste_ref planner_claims duration_match cache_prune auth_naming check_files golden_check \
-                   unknown_code_rename twin_halves titlecard_result; do
+                   unknown_code_rename twin_halves titlecard_result same_episode_files proposal_approval; do
             echo "::group::$t"
             EPID_TEST_DIR="$RUNNER_TEMP/$t" python "tests/${t}_test.py"
             echo "::endgroup::"
           done
+      - name: Browser approval smoke
+        env:
+          EPID_BROWSER_PORT: "18762"
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+          export EPID_TEST_DIR="$RUNNER_TEMP/browser"
+          python tests/proposal_approval_test.py > "$RUNNER_TEMP/browser-server.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true; cat "$RUNNER_TEMP/browser-server.log"' EXIT
+          for ((i=0; i<60; ++i)); do
+            curl -fsS "http://127.0.0.1:$EPID_BROWSER_PORT/api/status" >/dev/null 2>&1 && break
+            sleep 0.25
+          done
+          python tests/proposal_browser_smoke.py

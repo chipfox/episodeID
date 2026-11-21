@@ -20,8 +20,8 @@ from pathlib import Path
 
 import os
 
-from .config import MEDIA_ROOT, get_settings
-from .media_text import SUB_EXTS, VIDEO_EXTS
+from .config import MEDIA_ROOT, get_settings, safe_media_path
+from .media_text import SUB_EXTS, VIDEO_EXTS, cached_dialogue, dialogue_text
 from .references import describe_conflict, ref_meta
 from . import textsim
 
@@ -355,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 25
+PLAN_VERSION = 26
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -608,32 +608,34 @@ def _parts_complete(f: dict, eps: dict) -> bool:
     return _parts_check(f, eps)[0]
 
 
-def _own_text(f: dict | None) -> str:
-    """A file's dialogue, when it came from the file itself and is long enough to compare.
-
-    Sidecars are third-party files and may describe a different release; they cannot
-    tell two files apart.
-    """
-    if not f:
+def _own_text(root: Path, f: dict | None) -> str:
+    """Read cached whole-file dialogue of known provenance; never transcribe here."""
+    own_sources = ("remote ", "embedded ", "whisper ")
+    if not f or not str(f.get("text_source") or "").startswith(own_sources):
         return ""
-    text = str(f.get("sample_text") or "")
-    if not str(f.get("text_source") or "").startswith(("remote ", "embedded ", "whisper ")):
+    try:
+        video = safe_media_path(root / f["rel"])
+        if not video.is_file():
+            return ""
+        data = cached_dialogue(video) or {}
+    except (OSError, ValueError):
         return ""
-    return text if len(text.split()) >= 60 else ""
+    if data.get("language") or not str(data.get("source") or "").startswith(own_sources):
+        return ""
+    return dialogue_text(data.get("cues") or [], limit=400_000)
 
 
-def _same_code_relation(a: dict, b: dict | None) -> str:
-    """How two files that both match one episode relate: 'duplicate', 'split', 'unknown'.
-
-    Two encodes of one episode carry the same dialogue. The two halves of an episode
-    that was split across files carry different dialogue that both sit inside the
-    same reference. Overlap tells them apart; missing text cannot.
-    """
-    ta, tb = _own_text(a), _own_text(b)
-    if not ta or not tb:
+def _same_code_relation(root: Path, a: dict, b: dict | None) -> str:
+    """Distinguish equivalent, contained, and different dialogue without assuming labels."""
+    ga, gb = (textsim.bigrams(_own_text(root, f)) for f in (a, b))
+    if min(len(ga), len(gb)) < textsim.BIGRAM_FLOOR:
         return "unknown"
-    shared = textsim.overlap(textsim.bigrams(ta), textsim.bigrams(tb))
-    return "split" if shared < 0.35 else "duplicate"
+    ab, ba = textsim.containment(ga, gb), textsim.containment(gb, ga)
+    if min(ab, ba) >= 0.72:
+        return "duplicate"
+    if max(ab, ba) < 0.35:
+        return "different"
+    return "partial"
 
 
 def _one_per_code(chosen: list[tuple[dict, str, str, bool]]) -> list[tuple[dict, str, str, bool]]:
@@ -1223,24 +1225,22 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             # duplicates folder is data loss, so unknown text is a review, not a move.
             rivals = {winner[c[1]][0] for c in usable}
             rival = files_by_rel.get(next(iter(rivals))) if len(rivals) == 1 else None
-            relation = _same_code_relation(f, rival)
-            if relation == "split":
-                items.append({**base, "kind": "ok", "decided_by": "split files",
-                              "reason": f"Correct — {', '.join(codes)} is in two files with "
-                                        "different dialogue (one episode split across files); "
-                                        "both kept"})
-                continue
-            if relation == "unknown":
+            relation = _same_code_relation(root, f, rival)
+            if relation != "duplicate":
+                detail = {
+                    "unknown": "the two dialogues could not be compared",
+                    "partial": "the files have partial dialogue overlap, not equivalent content",
+                    "different": "the files have different dialogue and may be complementary",
+                }[relation]
                 items.append({**base, "kind": "review",
-                              "reason": f"Another file also matches {', '.join(codes)} and the "
-                                        "two dialogues could not be compared — check whether this "
-                                        "is one episode split across files before removing either",
-                              "suggested": codes})
+                                "reason": f"Another file also matches {', '.join(codes)}: "
+                                        f"{detail} — both files kept",
+                                "suggested": codes})
                 continue
             items.append({**base, "kind": "aside", "bucket": "duplicates",
                           "reason": f"Duplicate of {', '.join(codes)} (a better match exists)",
                           "targets": [{"path": f"{backup}/duplicates/{rel}"}],
-                          "selected": not ai})
+                          "selected": False})
             moving.add(rel)
             continue
 
@@ -1433,6 +1433,22 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     _apply_duration_checks(items, duration_factors, eps)
 
     for i, it in enumerate(items):
+        codes = it.get("suggested") or []
+        code = codes[0] if len(codes) == 1 else None
+        # A closest dialogue hit alone is never consent to make it an override.
+        # A full title-card read agreeing with independent high dialogue is a proposal.
+        if (it["kind"] == "review" and it["status"] != "MANUAL" and code in eps
+                and code not in it["expected"] and len(it["expected"]) <= 1
+                and not it.get("sample") and not it.get("ref_warning")
+                and not (meta.get(code) or {}).get("low_trust")
+                and it["duration_check"]["state"] not in ("warn", "fail")
+                and str(it.get("text_source") or "").startswith(("remote ", "embedded ", "whisper "))
+                and any(sg.get("confidence") == "high" and sg.get("dialogue_code") == code
+                        and (sg.get("title_card") or {}).get("code") == code
+                        and not (sg.get("title_card") or {}).get("partial")
+                        for sg in it["segments"])):
+            it["proposal"] = {"codes": codes, "action": "rename",
+                              "reason": "File dialogue and a full title-card read agree"}
         it["id"] = i
         it["pv"] = PLAN_VERSION
     order = {"join": 0, "split": 0, "rename": 1, "aside": 2, "review": 3, "ok": 4}
