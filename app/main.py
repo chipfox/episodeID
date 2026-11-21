@@ -1143,7 +1143,7 @@ class ProposalApproval(BaseModel):
 @app.post("/api/plans/{pid}/items/{iid}/proposal")
 def proposal_action(pid: int, iid: int, body: ProposalApproval):
     """Preview without writes; a matching token stages exactly the previewed plan."""
-    from .planner import ACTIONABLE, PLAN_VERSION, build_plan, sidecars
+    from .planner import ACTIONABLE, PLAN_VERSION, audio_pair_current, build_plan, sidecars
 
     def draft():
         plan = db.get_plan(pid) or _404()
@@ -1164,8 +1164,16 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
             if local.get("reference_id") != spanmatch.reference_id(reference):
                 raise HTTPException(409, "The reference changed since this scan. Rescan before approving.")
         source = item["source"]
+        root = Path(series["path"])
+        action = proposal.get("action", "rename")
         options = dict(series["options"] or {})
-        options["overrides"] = {**(options.get("overrides") or {}), source: proposal["codes"]}
+        pair = item.get("audio_pair") if action == "aside" else None
+        if action == "aside":
+            if not pair or not audio_pair_current(root, source, pair):
+                raise HTTPException(409, "One of the audio matches changed. Rescan both files.")
+            options["audio_duplicates"] = {**(options.get("audio_duplicates") or {}), source: pair}
+        else:
+            options["overrides"] = {**(options.get("overrides") or {}), source: proposal["codes"]}
         rows = build_plan({**series, "options": options}, scan["results"])
 
         def changes(it):
@@ -1192,8 +1200,7 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
                                 "targets": (new or {}).get("targets") or []})
 
         chosen = after.get(source)
-        action = proposal.get("action", "rename")
-        required = {"rename": "rename", "split": "split", "keep": "ok"}.get(action)
+        required = {"rename": "rename", "split": "split", "keep": "ok", "aside": "aside"}.get(action)
         if not chosen or not required or chosen["kind"] != required:
             raise HTTPException(409, "The proposal no longer produces the expected file change.")
         if chosen["kind"] == "split":
@@ -1202,7 +1209,6 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
                 round((float(a["end"]) + float(b["start"])) / 2, 1)
                 for a, b in zip(segments, segments[1:])
             ]
-        root = Path(series["path"])
         try:
             video = safe_media_path(root / source)
             paths = [video, *sorted(sidecars(video))]
@@ -1213,6 +1219,8 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
                 raise HTTPException(409, "The source has changed since its scan. Scan it again.")
             if any(safe_media_path(root / t["path"]).exists() for t in chosen.get("targets") or []):
                 raise HTTPException(409, "A destination already exists. Review the files together.")
+            if pair and (chosen.get("audio_pair") != pair or not audio_pair_current(root, source, pair)):
+                raise HTTPException(409, "One of the audio matches changed. Rescan both files.")
         except (OSError, ValueError) as e:
             raise HTTPException(409, "The source file changed. Scan it again.") from e
         chosen["selected"] = action != "keep"

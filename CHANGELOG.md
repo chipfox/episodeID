@@ -6,6 +6,11 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Review unresolved duplicate claims with sampled audio.** A scan may compare
+  cached Chromaprint windows when full dialogue cannot settle a competing file.
+  A strong audio match produces one review for the pair, not a new episode label;
+  approval stages the duplicate separately from Apply. Changed files invalidate
+  the evidence and staged action.
 - **Match a passage, not the size of the reference.** Ordered dialogue anchors
   show the part of an oversized subtitle that explains the file. Compare opens
   on that passage and can search just the remaining video dialogue. An

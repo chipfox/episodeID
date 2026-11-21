@@ -957,11 +957,16 @@ def job_scan(ctx, params):
     for f in files:
         counts[f["status"]] = counts.get(f["status"], 0) + 1
     scan = {"files": files, "counts": counts, "reference_count": len(refs)}
-    scan_id = db.add_scan(series["id"], scan)
     series_now = db.get_series(series["id"])
-    fresh_scan = db.latest_scan(series["id"])
-    assert series_now is not None and fresh_scan is not None
-    items = build_plan(series_now, fresh_scan["results"])
+    assert series_now is not None
+    items = build_plan(series_now, scan)
+    if any(it.get("audio_candidate") for it in items):
+        from .planner import probe_audio_pairs
+        ctx.log("Comparing audio for unresolved duplicate claims.")
+        scan["audio_pairs"] = probe_audio_pairs(root, items, files, ctx)
+        if scan["audio_pairs"]:
+            items = build_plan(series_now, scan)
+    scan_id = db.add_scan(series["id"], scan)
     prev_plan = db.latest_plan(series["id"]) or {}
     if params.get("only") and prev_plan.get("status") == "draft":
         # Checking a few files again must not re-tick unchanged actions the user
@@ -2275,6 +2280,12 @@ def job_apply(ctx, params):
         raise RuntimeError("This plan was already applied. Rescan to make a new plan.")
     if (db.latest_plan(series["id"]) or {}).get("id") != plan["id"]:
         raise RuntimeError("This is no longer the latest draft. Reload before applying changes.")
+    from .planner import audio_pair_current
+    for it in plan["items"]:
+        pair = it.get("audio_pair")
+        if it.get("selected") and it["kind"] == "aside" and pair:
+            if not audio_pair_current(Path(series["path"]), it["source"], pair):
+                raise RuntimeError("A reviewed audio duplicate changed. Rescan before applying.")
     result = apply_plan(series, plan, ctx)
     autocheck.record(series)
     if result.get("applied"):

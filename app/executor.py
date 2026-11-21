@@ -768,7 +768,7 @@ def sonarr_rescan(series: dict, ctx) -> None:
 # --------------------------------------------------------------------- cache
 
 CACHE_KINDS = {"text": "Dialogue (subtitles / Whisper)", "titlecards": "Title-card OCR",
-               "frames": "Split preview pictures"}
+               "frames": "Split preview pictures", "fingerprints": "Sampled audio fingerprints"}
 
 
 def _cache_files():
@@ -791,8 +791,8 @@ def cache_summary() -> dict:
 
 def prune_cache() -> dict:
     """Delete cached dialogue and title-card OCR for files that no longer exist (or were
-    replaced: the cache is keyed by size + modified time), and all split preview
-    pictures (they're quick to make again). Files in every series folder and its backup
+    replaced: the cache is keyed by size + modified time), and all regenerable split
+    previews and audio fingerprints. Files in every series folder and its backup
     folder count as in use. Refuses if a series folder can't be found — an unmounted
     share would otherwise look like every file was gone."""
     from .media_text import VIDEO_EXTS, _cache_key
@@ -817,7 +817,7 @@ def prune_cache() -> dict:
     deleted, freed = 0, 0
     for kind, f in list(_cache_files()):
         key = f.stem.split("_")[0]
-        if kind != "frames" and key in live:
+        if kind not in ("frames", "fingerprints") and key in live:
             continue
         try:
             size = f.stat().st_size

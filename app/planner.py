@@ -355,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 28
+PLAN_VERSION = 29
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -641,6 +641,49 @@ def _same_code_relation(root: Path, a: dict, b: dict | None) -> str:
     if max(ab, ba) < 0.35:
         return "different"
     return "partial"
+
+
+def audio_identity(root: Path, rel: str) -> list[int] | None:
+    try:
+        p = safe_media_path(root / rel)
+        if not p.is_relative_to(root.resolve()) or not p.is_file():
+            return None
+        st = p.stat()
+        return [st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_dev, st.st_ino]
+    except (OSError, ValueError):
+        return None
+
+
+def audio_pair_current(root: Path, source: str, pair: dict) -> bool:
+    return bool(pair.get("source_id") and pair.get("rival_id")
+                and audio_identity(root, source) == pair["source_id"]
+                and audio_identity(root, pair["rival"]) == pair["rival_id"])
+
+
+def probe_audio_pairs(root: Path, items: list[dict], files: list[dict], ctx) -> dict:
+    """Only a scan job decodes audio; plan fetch and approval just check identities."""
+    from .fingerprints import compare
+
+    by_rel = {f["rel"]: f for f in files}
+    found = {}
+    for it in items:
+        rival = it.get("audio_candidate")
+        if not rival:
+            continue
+        ctx.check_cancel()
+        source = it["source"]
+        a, b = by_rel[source], by_rel[rival]
+        pair = {"rival": rival, "source_id": audio_identity(root, source),
+                "rival_id": audio_identity(root, rival)}
+        if not audio_pair_current(root, source, pair):
+            continue
+        if (pair["source_id"][:2] != [a.get("size"), a.get("mtime_ns")]
+                or pair["rival_id"][:2] != [b.get("size"), b.get("mtime_ns")]):
+            continue
+        result = compare(root, a, b)
+        if result in ("equivalent", "different") and audio_pair_current(root, source, pair):
+            found[source] = {**pair, "result": result}
+    return found
 
 
 def _one_per_code(chosen: list[tuple[dict, str, str, bool]]) -> list[tuple[dict, str, str, bool]]:
@@ -998,7 +1041,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     eps = {f"S{e['season']:02d}E{e['episode']:02d}": e for e in series["episodes"]}
     series_name = (series.get("options") or {}).get("name_in_files") or root.name
 
-    files = scan["files"]
+    files = [dict(f) for f in scan["files"]]
     duration_factors = _duration_factors(files, eps)
     files_by_rel = {f["rel"]: f for f in files}
     items: list[dict] = []
@@ -1305,10 +1348,15 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                     "different": "the files have different dialogue and may be complementary",
                     "incomplete": "the dialogue agrees, but not all episodes in this filename are accounted for",
                 }[relation]
+                audio_candidate = (rival["rel"] if rival and relation in ("unknown", "partial")
+                                   and codes == base["expected"] == (rival.get("expected") or [])
+                                   and not sample_only and not ai and not manual
+                                   and not f.get("reference_conflict") and not f.get("story_pair_overlap")
+                                   else None)
                 items.append({**base, "kind": "review",
                                 "reason": f"Another file also matches {', '.join(codes)}: "
                                         f"{detail} — both files kept",
-                                "suggested": codes})
+                                "suggested": codes, "audio_candidate": audio_candidate})
                 continue
             items.append({**base, "kind": "aside", "bucket": "duplicates",
                           "reason": f"Duplicate of {', '.join(codes)} (a better match exists)",
@@ -1507,6 +1555,33 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                                 "check this before applying")
 
     _apply_duration_checks(items, duration_factors, eps)
+
+    by_rel = {it["source"]: it for it in items}
+    approved = (series.get("options") or {}).get("audio_duplicates") or {}
+    evidence = scan.get("audio_pairs") or {}
+    for it in items:
+        rival = it.pop("audio_candidate", None)
+        other = by_rel.get(rival)
+        if (it["kind"] != "review" or not other or other["kind"] != "ok" or other.get("sample")
+                or it["duration_check"]["state"] in ("warn", "fail")
+                or any((meta.get(c) or {}).get("low_trust") for c in it["expected"])):
+            continue
+        it["audio_candidate"] = rival
+        pair = evidence.get(it["source"]) or approved.get(it["source"])
+        if not pair or pair["rival"] != rival or not audio_pair_current(root, it["source"], pair):
+            continue
+        if pair["result"] == "different":
+            it["reason"] += ". No audio match in the sampled windows. This does not rule out a different cut."
+        elif pair["result"] == "equivalent":
+            it["audio_pair"] = pair
+            if approved.get(it["source"]) == pair:
+                it.update(kind="aside", bucket="duplicates", selected=False,
+                          reason=f"Reviewed audio match — keep {rival}",
+                          targets=[{"path": f"{backup}/duplicates/{it['source']}"}])
+            else:
+                it["reason"] = f"Sampled audio matches {rival}. Review both versions together."
+                it["proposal"] = {"codes": it["expected"], "action": "aside",
+                                  "reason": f"Keep {rival} in place and stage this copy for the duplicates folder. Audio does not verify the episode label."}
 
     for i, it in enumerate(items):
         codes = it.get("suggested") or []

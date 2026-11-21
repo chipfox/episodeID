@@ -845,7 +845,7 @@ async function tabPlan(reload = true, searchOnly = false) {
       const { token, proposal, changes } = await api(url, { method: "POST", body: {} });
       if (!b.isConnected || state.series?.id !== sid) return;
       const keep = proposal.action === "keep";
-      const box = modal(`<h2>${keep ? "Keep filename as " : `Review ${esc(proposal.action || "rename")} to `}${esc(proposal.codes.join(" + "))}</h2>
+      const box = modal(`<h2>${proposal.action === "aside" ? "Review audio duplicate" : `${keep ? "Keep filename as " : `Review ${esc(proposal.action || "rename")} to `}${esc(proposal.codes.join(" + "))}`}</h2>
         <p>${esc(proposal.reason)}</p>
         <ul>${changes.map((c) => `<li>${esc(c.source)}: ${esc(c.before || "—")} → ${esc(c.after || "—")}
           ${c.reason ? `<div class="muted small">${esc(c.reason)}</div>` : ""}
@@ -1472,7 +1472,7 @@ function rowHtml(it, eps, applied) {
     <td>${local ? `<div class="small"><b>${local.code ? esc(local.code) + " · " : ""}Dialogue ${fmtTime(local.start)}–${fmtTime(local.end)}</b> · ${Math.round(local.coverage * 100)}% ordered match</div>` : ""}${segs}${src}</td>
     <td class="detect-cell">${methodsHtml(it.methods)}</td>
     <td class="actions"><div class="row-actions">${it.text_source && it.text_source !== "none" ? `<button class="btn small evidence" data-src="${esc((it.sources || [it.source])[0])}" data-code="${esc(local?.reference || (it.codes || it.suggested || it.expected || [])[0] || "")}" data-focus="${local ? "matched" : ""}" title="Read the file's dialogue beside this episode's reference and judge the match yourself">${local ? "Compare passage" : "Compare"}</button>` : ""}
-      ${proposal ? `<button class="btn small evi-apply" data-id="${it.id}" title="${esc(proposal.reason)}">${proposal.action === "keep" ? "Keep filename…" : `Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}`}</button>` : ""}
+      ${proposal ? `<button class="btn small evi-apply" data-id="${it.id}" title="${esc(proposal.reason)}">${proposal.action === "aside" ? "Review audio duplicate…" : proposal.action === "keep" ? "Keep filename…" : `Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}`}</button>` : ""}
       <button class="btn small rescan" data-src="${esc(it.source)}" title="Re-read this file and refresh its plan row">Rescan</button>
       <details class="row-menu"><summary class="btn small">More</summary><div class="row-menu-list">
         ${applied ? "" : `<button class="btn small set-ep" data-src="${esc(it.source)}" data-cur="${esc(cur)}">Set episode…</button>
