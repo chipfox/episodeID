@@ -581,29 +581,30 @@ def series_get(sid: int):
 
 @app.patch("/api/series/{sid}/options")
 def series_options(sid: int, body: dict):
-    s = db.get_series(sid) or _404()
-    opts = dict(s["options"] or {})
-    for k in ("fandom_wiki", "fandom_page_pattern", "fandom_title_overrides",
-              "include_specials", "name_in_files", "title_cards", "title_cards_scope",
-              "title_cards_trust", "summary_match"):
-        if k in body:
-            opts[k] = body[k]
-    if "fandom_wiki" in body:
-        from .references import normalize_page, normalize_wiki
-        opts["fandom_wiki"] = normalize_wiki(body["fandom_wiki"] or "")
-        body["fandom_wiki"] = opts["fandom_wiki"]
-        if isinstance(opts.get("fandom_title_overrides"), dict):
-            opts["fandom_title_overrides"] = {k.strip().upper(): normalize_page(v)
-                                              for k, v in opts["fandom_title_overrides"].items() if v}
-        opts["fandom_checked"] = True  # the user decided; don't auto-detect over it
-        if (body["fandom_wiki"] or "").strip() != ((s["options"] or {}).get("fandom_wiki") or ""):
-            opts.pop("fandom_page_map", None)      # new wiki: its pages get mapped on next fetch
-            opts.pop("fandom_discovery", None)
-    if body.get("title_cards") == "auto" and (s["options"] or {}).get("title_cards") not in (None, "auto"):
-        opts.pop("title_cards_status", None)  # switching back to auto: test again
-    if "imdb_id" in body:
-        db.update_series(sid, imdb_id=(body["imdb_id"] or None))
-    db.update_series(sid, options=opts)
+    from .references import normalize_page, normalize_wiki
+
+    with db.write_transaction():
+        s = db.get_series(sid) or _404()
+        old = s["options"] or {}
+        opts = dict(old)
+        for k in ("fandom_wiki", "fandom_page_pattern", "fandom_title_overrides",
+                  "include_specials", "name_in_files", "title_cards", "title_cards_scope",
+                  "title_cards_trust", "summary_match"):
+            if k in body:
+                opts[k] = body[k]
+        if "fandom_wiki" in body:
+            opts["fandom_wiki"] = normalize_wiki(body["fandom_wiki"] or "")
+            if isinstance(opts.get("fandom_title_overrides"), dict):
+                opts["fandom_title_overrides"] = {k.strip().upper(): normalize_page(v)
+                                                  for k, v in opts["fandom_title_overrides"].items() if v}
+            opts["fandom_checked"] = True  # the user decided; don't auto-detect over it
+            if opts["fandom_wiki"] != (old.get("fandom_wiki") or ""):
+                opts.pop("fandom_page_map", None)  # new wiki: remap the pages on next fetch
+                opts.pop("fandom_discovery", None)
+        if body.get("title_cards") == "auto" and old.get("title_cards") not in (None, "auto"):
+            opts.pop("title_cards_status", None)  # switching back to auto: test again
+        fields = {"imdb_id": body["imdb_id"] or None} if "imdb_id" in body else {}
+        db.update_series(sid, options=opts, **fields)
     return series_out(db.get_series(sid) or _404(), full=True)
 
 
@@ -624,8 +625,9 @@ def summary_calibrate(sid: int):
     opts.pop("summary_calibration", None)
     s["options"] = opts
     cal = summary_match.ensure_calibration(s, index, refs, get_settings())
-    opts["summary_calibration"] = cal
-    db.update_series(sid, options=opts)
+    with db.write_transaction():
+        current = db.get_series(sid) or _404()
+        db.update_series(sid, options={**(current["options"] or {}), "summary_calibration": cal})
     return {"calibration": cal, "note": summary_match.calibration_note(cal)}
 
 
@@ -641,9 +643,11 @@ async def upload_reference(sid: int, code: str, file: UploadFile = File(...)):
         raise HTTPException(400, "Upload a .srt, .ass, .vtt or .txt file")
     d = manual_dir(s["tvdb_id"])
     d.mkdir(parents=True, exist_ok=True)
-    for old in d.glob(f"{code}*"):
-        old.unlink()
-    (d / f"{code}{ext}").write_bytes(await file.read())
+    final = d / f"{code}{ext}"
+    final.write_bytes(await file.read())
+    for old in d.glob(f"{code}.*"):
+        if old != final:
+            old.unlink()
     return {"ok": True}
 
 
@@ -712,9 +716,10 @@ def paste_reference(sid: int, code: str, body: PastedRef):
     if words < 50:
         tmp.unlink(missing_ok=True)
         raise HTTPException(400, "Couldn't find dialogue in that text — paste the transcript or subtitle itself")
-    for old in d.glob(f"{code}*"):
-        old.unlink()
     tmp.replace(final)
+    for old in d.glob(f"{code}.*"):
+        if old != final:
+            old.unlink()
     kind = {".txt": "transcript", ".srt": "SRT subtitle", ".vtt": "WebVTT subtitle", ".ass": "ASS subtitle"}[ext]
     from .references import MIN_TRANSCRIPT_WORDS
     warn = (f"Only {words} words of dialogue — an episode usually has well over {MIN_TRANSCRIPT_WORDS}; "
@@ -728,7 +733,7 @@ def delete_reference(sid: int, code: str):
     clear_reference(s["tvdb_id"], code)
     d = manual_dir(s["tvdb_id"])
     if d.exists():
-        for old in d.glob(f"{code}*"):
+        for old in d.glob(f"{code}.*"):
             old.unlink()
     return {"ok": True}
 
@@ -1045,19 +1050,27 @@ def _rebuild_plan(series: dict, plan: dict) -> dict | None:
     scan = db.get_scan(plan["scan_id"])
     if not scan:
         return None
+    items = build_plan(series, scan["results"])
+    _carry_plan_selections(plan, items)
+    with db.write_transaction():
+        latest = db.latest_plan(series["id"])
+        if latest != plan or db.get_series(series["id"]) != series:
+            return latest  # another request already changed the draft or its settings
+        pid = db.add_plan(series["id"], plan["scan_id"], items)
+    log.info("series %s: plan #%s made again with this version's rules as #%s", series["id"], plan["id"], pid)
+    return db.get_plan(pid)
+
+
+def _carry_plan_selections(plan: dict, items: list[dict]) -> None:
     key = lambda it: (it["kind"], tuple(it.get("sources") or [it["source"]]),  # noqa: E731
                       tuple(t["path"] for t in it.get("targets") or []))
     old = {key(it): it for it in plan["items"]}
-    items = build_plan(series, scan["results"])
     for it in items:
         prev = old.get(key(it))
         if prev:
             it["selected"] = prev.get("selected", it["selected"])
             if prev.get("cuts"):
                 it["cuts"] = prev["cuts"]
-    pid = db.add_plan(series["id"], plan["scan_id"], items)
-    log.info("series %s: plan #%s made again with this version's rules as #%s", series["id"], plan["id"], pid)
-    return db.get_plan(pid)
 
 
 class Selection(BaseModel):
@@ -1164,6 +1177,14 @@ class ProposalApproval(BaseModel):
     token: str | None = None
 
 
+def _require_draft_snapshot(series: dict, plan: dict | None, scan_id: int | None) -> None:
+    """Compare the prepared draft's inputs while holding the SQLite write lock."""
+    sid = series["id"]
+    if (db.active_job(sid) or db.get_series(sid) != series or db.latest_scan_id(sid) != scan_id
+            or db.latest_plan(sid) != plan):
+        raise HTTPException(409, "The draft or series changed. Reload the plan and try again.")
+
+
 @app.post("/api/plans/{pid}/items/{iid}/proposal")
 def proposal_action(pid: int, iid: int, body: ProposalApproval):
     """Preview without writes; a matching token stages exactly the previewed plan."""
@@ -1255,25 +1276,22 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
         except (OSError, ValueError) as e:
             raise HTTPException(409, "The source file changed. Scan it again.") from e
         chosen["selected"] = action != "keep"
-        token = hashlib.sha256(json.dumps([plan, options, rows, stats], sort_keys=True).encode()).hexdigest()
-        return token, proposal, changed, options, rows, sid, scan["id"]
+        token = hashlib.sha256(json.dumps([series, plan, options, rows, stats], sort_keys=True).encode()).hexdigest()
+        return token, proposal, changed, options, rows, series, plan, scan["id"]
 
+    token, proposal, changed, options, rows, series, plan, scan_id = draft()
     if body.token is None:
-        token, proposal, changed, *_ = draft()
         return {"token": token, "proposal": proposal, "changes": changed}
 
-    conn = db.conn()
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        token, _proposal, _changed, options, rows, sid, scan_id = draft()
-        if body.token != token:
-            raise HTTPException(409, "The proposal changed. Preview it again before approving.")
+    if body.token != token:
+        raise HTTPException(409, "The proposal changed. Preview it again before approving.")
+    # Plan computation and evidence validation can read slow network media.
+    # Only recheck the database snapshot and commit the writes under the lock.
+    sid = series["id"]
+    with db.write_transaction():
+        _require_draft_snapshot(series, plan, scan_id)
         db.update_series(sid, options=options)
         new_id = db.add_plan(sid, scan_id, rows)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
     return db.get_plan(new_id)
 
 
@@ -1302,16 +1320,19 @@ def set_override(sid: int, body: Override):
     if body.source in saved:
         saved.pop(body.source)
         opts["confirmations"] = saved
-    db.update_series(sid, options=opts)
     scan = db.latest_scan(sid)
-    draft = db.latest_plan(sid) if revoked else None
-    if draft and draft["status"] == "draft" and scan and draft["scan_id"] == scan["id"]:
-        return _rebuild_plan(db.get_series(sid), draft) or plan_get(sid)
+    draft = db.latest_plan(sid)
+    items = None
     if scan:
         from .planner import build_plan
-        items = build_plan(db.get_series(sid), scan["results"])
-        db.add_plan(sid, scan["id"], items)
-    return plan_get(sid)
+        items = build_plan({**s, "options": opts}, scan["results"])
+        if revoked and draft and draft["status"] == "draft" and draft["scan_id"] == scan["id"]:
+            _carry_plan_selections(draft, items)
+    with db.write_transaction():
+        _require_draft_snapshot(s, draft, scan["id"] if scan else None)
+        db.update_series(sid, options=opts)
+        new_id = db.add_plan(sid, scan["id"], items) if scan else None
+    return db.get_plan(new_id) if new_id else plan_get(sid)
 
 
 @app.post("/api/plans/{pid}/apply")

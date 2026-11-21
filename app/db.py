@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from .config import CONFIG_DIR
@@ -93,6 +94,19 @@ def init() -> None:
         "WHERE status IN ('queued','running')", (now(),))
 
 
+@contextmanager
+def write_transaction():
+    """Serialize a short read/modify/write, not file I/O or planning."""
+    c = conn()
+    c.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+        c.commit()
+    except BaseException:
+        c.rollback()
+        raise
+
+
 def _row(r: sqlite3.Row | None, json_fields=()) -> dict | None:
     if r is None:
         return None
@@ -154,6 +168,11 @@ def latest_scan(series_id: int) -> dict | None:
     r = conn().execute("SELECT * FROM scans WHERE series_id=? ORDER BY id DESC LIMIT 1",
                        (series_id,)).fetchone()
     return _row(r, ("results",))
+
+
+def latest_scan_id(series_id: int) -> int | None:
+    row = conn().execute("SELECT MAX(id) FROM scans WHERE series_id=?", (series_id,)).fetchone()
+    return row[0]
 
 
 def get_scan(scan_id: int) -> dict | None:

@@ -6,6 +6,9 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Protect episode decisions from concurrent edits.** Slow evidence checks run
+  outside the SQLite write lock. Approval rejects a changed draft, and series
+  settings writes no longer replace a newly recorded decision with stale options.
 - **Find better references from a review.** Compare can open a summary suggestion
   and link directly to the reference editor. Search for a subtitle whose release
   name and timings fit one episode, then preview it before saving. Unresolved

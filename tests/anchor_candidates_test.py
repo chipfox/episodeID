@@ -74,6 +74,11 @@ with patch.object(main, "OpenSubtitles", Provider):
     assert set(load_refs(987654)) == {"S01E02"}
     saved = client.post(base + "/text", json={"text": candidate["text"]})
     assert saved.status_code == 200 and load_refs(987654)["S01E01"]["source"] == "manual:S01E01.srt"
+    refs = f"/api/series/{sid}/references"
+    for code in ("S01E100", "S01E10"):
+        assert client.post(f"{refs}/{code}/text", json={"text": candidate["text"]}).status_code == 200
+    assert client.delete(f"{refs}/S01E10").status_code == 200
+    assert "S01E100" in load_refs(987654) and "S01E10" not in load_refs(987654)
 
 with patch("app.media_text.subprocess.run") as run:
     run.return_value.stdout = b'{"chapters":[{"start_time":"0"},{"start_time":"42"},{"start_time":"42"},{"start_time":"199"}]}'

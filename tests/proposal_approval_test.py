@@ -1,7 +1,10 @@
 """Preview is read-only; only the exact current proposal can be staged."""
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
+from unittest.mock import patch
 
 W = Path(os.environ.get("EPID_TEST_DIR", "/tmp/epid_proposal_approval"))
 os.environ.update(MEDIA_ROOT=str(W / "media"), CONFIG_DIR=str(W / "config"), CACHE_DIR=str(W / "cache"))
@@ -63,8 +66,53 @@ preview = post({}).json()
 (root / src).write_bytes(b"replaced")
 assert post({"token": preview["token"]}).status_code == 409
 
-response = post({"token": post({}).json()["token"]})
+preview = post({}).json()
+building, release = Event(), Event()
+original_build = planner.build_plan
+
+
+def slow_build(*args, **kwargs):
+    building.set()
+    assert release.wait(10), "test did not release the simulated slow media read"
+    return original_build(*args, **kwargs)
+
+
+# Settings (and unrelated jobs) must be able to write while approval reads media.
+# If they change this series, the prepared approval must fail rather than clobber them.
+with ThreadPoolExecutor() as pool, patch.object(planner, "build_plan", slow_build):
+    pending = pool.submit(post, {"token": preview["token"]})
+    try:
+        assert building.wait(5)
+        settings = pool.submit(client.patch, f"/api/series/{sid}/options", json={"title_cards": "off"})
+        assert settings.result(timeout=5).status_code == 200
+    finally:
+        release.set()
+    assert pending.result(timeout=5).status_code == 409
+assert db.latest_plan(sid)["id"] == pid and not db.get_series(sid)["options"].get("overrides")
+
+building.clear()
+release.clear()
+
+
+def slow_calibration(*_args):
+    building.set()
+    assert release.wait(10), "test did not release the summary computation"
+    return {"available": False, "reason": "test"}
+
+
+# In the reverse order, an already-running calibration must merge its result
+# into the post-approval options rather than replace them with its old snapshot.
+with ThreadPoolExecutor() as pool, patch.object(main.summary_match, "ensure_calibration", slow_calibration):
+    pending = pool.submit(client.post, f"/api/series/{sid}/summary/calibrate")
+    try:
+        assert building.wait(5)
+        response = post({"token": post({}).json()["token"]})
+    finally:
+        release.set()
+    assert pending.result(timeout=5).status_code == 200
 assert response.status_code == 200, response.text
+assert db.get_series(sid)["options"]["overrides"][src] == ["S01E02"]
+assert db.get_series(sid)["options"]["summary_calibration"]["reason"] == "test"
 staged = {it["source"]: it for it in response.json()["items"]}
 assert staged[src]["kind"] == "rename" and staged[src]["selected"]
 assert staged[weak]["selected"] and not staged[other]["selected"]
