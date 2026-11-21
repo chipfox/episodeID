@@ -355,7 +355,7 @@ ACTIONABLE = ("rename", "split", "aside", "join")
 # Bumped when build_plan learns something new (joins, …): a draft plan made by an older
 # version is rebuilt from its scan when it's next shown, so the new kinds of changes
 # appear without a rescan.
-PLAN_VERSION = 26
+PLAN_VERSION = 27
 
 # "… - Part 2", "…, Part II", "… Pt. 3", "… (Part 1)" — the last one in the name.
 _PART = re.compile(r"(?i)(?:\s*[-–,]\s*|\s+|\s*\(\s*)(?:part|pt\.?)\s*(\d{1,2}|[ivx]{1,4}|one|two|three|four|five|six)\b\s*\)?")
@@ -386,7 +386,7 @@ def _join_parts(items, files, decided, eps, root, layout, s, series_name, year) 
     by_rel = {f["rel"]: f for f in files}
     groups: dict[str, list[tuple[int, str]]] = {}
     for f in files:
-        if f.get("scope") == "sample":
+        if f.get("scope") == "sample" or _combined(f):
             continue
         pk = part_of(f["rel"])
         if pk:
@@ -481,7 +481,8 @@ def _eliminate(items, eps, root, layout, s, series_name, year) -> None:
     for it in items:
         for c in it.get("expected") or []:
             named.setdefault(c, []).append(it)
-    unsettled = [it for it in items if it["kind"] == "review" and len(it.get("expected") or []) <= 1
+    unsettled = [it for it in items if it["kind"] == "review" and not it.get("combined")
+                 and len(it.get("expected") or []) <= 1
                  and not it.get("sample") and not strong_other(it) and not it.get("claimed_by")]
 
     def season_of(it):
@@ -968,6 +969,23 @@ def _detection_methods(f: dict, s: dict, series: dict, parts: bool,
     return methods
 
 
+def _combined(f: dict) -> dict | None:
+    if f.get("status") == "MANUAL":
+        return None
+    ev = f.get("evidence") or {}
+    if ev.get("combined"):
+        return ev["combined"]
+    if ev.get("half") or any(sg.get("broad_ref") for sg in f.get("segments") or []):
+        return {"state": "unresolved", "reference": ev.get("top1")}
+    return None
+
+
+def _combined_duration_ok(f: dict, codes: list[str], factors: dict, eps: dict) -> bool:
+    check = _duration_evidence({"codes": codes, "duration": f.get("duration")}, factors, eps)
+    ratio = check["ratio"]
+    return ratio is not None and DURATION_OK_RANGE[0] <= ratio <= DURATION_OK_RANGE[1]
+
+
 def build_plan(series: dict, scan: dict) -> list[dict]:
     s = get_settings()
     root = Path(series["path"])
@@ -1023,6 +1041,11 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     rank = {"manual": 3, "high": 2, "parts": 2, "ai": 1, "provisional": 0, "low": 0}
     claims: dict[str, list[tuple]] = {}
     for f in files:
+        combined = _combined(f)
+        if combined and (combined["state"] != "verified" or not combined.get("codes")
+                         or combined["codes"] != (f.get("expected") or [])
+                         or not _combined_duration_ok(f, combined["codes"], duration_factors, eps)):
+            continue
         for seg, code, strength, ai in decided[f["rel"]]:
             if strength in ("low", "provisional"):
                 continue
@@ -1093,6 +1116,26 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 "decided_by": decided_by, "decided_confidence": ai_conf,
                 "scope": "sample" if sample_only else (f.get("scope") or "full"),
                 "sample": sample_only}
+
+        combined = _combined(f)
+        if combined:
+            codes = combined.get("codes") or []
+            verified = (combined["state"] == "verified" and codes
+                        and not sample_only and [c[1] for c in chosen] == codes
+                        and all(c[2] == "high" for c in chosen))
+            plausible = _combined_duration_ok(f, codes, duration_factors, eps)
+            if (verified and plausible and codes == base["expected"]
+                    and all(winner.get(c, (None,))[0] == rel for c in codes)):
+                items.append({**base, "combined": combined, "codes": codes, "kind": "ok", "decided_by": "parts",
+                              "reason": "Correct — independently labeled dialogue spans agree with the filename"})
+            else:
+                reason = ("Distinct labeled spans were matched. Review the ordered episode codes."
+                          if verified else "Combined reference matched; episode labels unresolved. No files moved.")
+                if verified and not plausible:
+                    reason += " Runtime does not corroborate this identification."
+                items.append({**base, "combined": combined, "kind": "review", "reason": reason,
+                              "codes": codes if verified else [], "suggested": codes if verified else []})
+            continue
 
         # Summary fallback: a no-reference file can be settled by its own
         # summary only at the calibrated auto gate, or with a title card's
@@ -1392,6 +1435,9 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             it = by_rel[occ]
             if it["kind"] not in ("review",):
                 continue
+            if it.get("combined"):
+                it["claimed_by"] = new_owner
+                continue
             card_ok = sorted({sg["code"] for sg in it.get("segments") or []
                               if sg.get("title_card") and sg.get("code") in it["expected"]})
             how = "AI suggestion" if owner.get("ai") else "title card" if all(
@@ -1443,6 +1489,7 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
         # A closest dialogue hit alone is never consent to make it an override.
         # A full title-card read agreeing with independent high dialogue is a proposal.
         if (it["kind"] == "review" and it["status"] != "MANUAL" and code in eps
+                and not it.get("combined")
                 and code not in it["expected"] and len(it["expected"]) <= 1
                 and not it.get("sample") and not it.get("ref_warning")
                 and not (meta.get(code) or {}).get("low_trust")
@@ -1454,6 +1501,17 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                         for sg in it["segments"])):
             it["proposal"] = {"codes": codes, "action": "rename",
                               "reason": "File dialogue and a full title-card read agree"}
+        combined = it.get("combined") or {}
+        if (it["kind"] == "review" and combined.get("state") == "verified" and codes
+                and codes != it["expected"] and all(c in eps for c in codes)
+                and not it.get("claimed_by") and not it.get("sample")
+                and not any((meta.get(c) or {}).get("low_trust") for c in codes)
+                and _combined_duration_ok(it, codes, duration_factors, eps)):
+            first = eps[codes[0]]
+            consecutive = all(eps[c]["season"] == first["season"]
+                              and eps[c]["episode"] == first["episode"] + j for j, c in enumerate(codes))
+            it["proposal"] = {"codes": codes, "action": "rename" if consecutive else "split",
+                              "reason": "Independently labeled dialogue spans match in this order"}
         it["id"] = i
         it["pv"] = PLAN_VERSION
     order = {"join": 0, "split": 0, "rename": 1, "aside": 2, "review": 3, "ok": 4}

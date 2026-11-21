@@ -31,7 +31,7 @@ jobs:
           for t in textsim settings_alias repair_marker db_retention evidence_view episode_scores \
                    mislabel_rename reference_duplicate_guard reference_swap full_escalation \
                    paste_ref planner_claims duration_match cache_prune auth_naming check_files golden_check \
-                   unknown_code_rename twin_halves titlecard_result same_episode_files proposal_approval; do
+                   unknown_code_rename combined_spans titlecard_result same_episode_files proposal_approval; do
             echo "::group::$t"
             EPID_TEST_DIR="$RUNNER_TEMP/$t" python "tests/${t}_test.py"
             echo "::endgroup::"

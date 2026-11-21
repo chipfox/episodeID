@@ -839,13 +839,16 @@ async function tabPlan(reload = true, searchOnly = false) {
   syncAll($("#all-visible", tab));
   $$("button.set-ep", tab).forEach((b) => b.onclick = () => setEpisodeDialog(b.dataset.src, b.dataset.cur));
   $$("button.evi-apply", tab).forEach((b) => b.onclick = async () => {
+    const sid = state.series.id;
     const url = `/api/plans/${plan.id}/items/${b.dataset.id}/proposal`;
     try {
       const { token, proposal, changes } = await api(url, { method: "POST", body: {} });
+      if (!b.isConnected || state.series?.id !== sid) return;
       const box = modal(`<h2>Review ${esc(proposal.action || "rename")} to ${esc(proposal.codes.join(" + "))}</h2>
         <p>${esc(proposal.reason)}</p>
         <ul>${changes.map((c) => `<li>${esc(c.source)}: ${esc(c.before || "—")} → ${esc(c.after || "—")}
           ${c.reason ? `<div class="muted small">${esc(c.reason)}</div>` : ""}
+          ${c.approximate_cuts?.length ? `<div class="small">Approximate cut: ${c.approximate_cuts.map(fmtCut).join(", ")}</div>` : ""}
           ${(c.targets || []).map((t) => `<div class="path">↳ ${esc(t.path)}</div>`).join("")}</li>`).join("")}</ul>
         <p>Stage this decision in the draft. No files move until you choose Apply.</p>
         <div class="row"><div class="spacer"></div><button class="btn" id="proposal-cancel">Cancel</button>
@@ -855,7 +858,9 @@ async function tabPlan(reload = true, searchOnly = false) {
       stage.onclick = async () => {
         stage.disabled = true;
         try {
-          state.plan = await api(url, { method: "POST", body: { token } });
+          const staged = await api(url, { method: "POST", body: { token } });
+          if (!stage.isConnected || state.series?.id !== sid) return;
+          state.plan = staged;
           closeModal();
           state.filter = "actions";
           history.replaceState({ series: state.series.id, tab: "plan", filter: state.filter }, "", seriesHash("plan", state.filter));

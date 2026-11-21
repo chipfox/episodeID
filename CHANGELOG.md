@@ -6,6 +6,10 @@ Changelog; release image tags identify their source commit.
 ## [Unreleased] — 2026-11-20
 
 ### Changed
+- **Match combined subtitles by independently labeled spans, not their
+  midpoint.** A partial or unverified match explains what is known without
+  relabeling the whole video. Complete labels in a different order or filename
+  can be reviewed as an unticked proposal.
 - **Episode proposals have a read-only preview.** A weak candidate is not a
   rename action. Approval stages the reviewed change without moving media;
   stale previews are rejected, and existing selections are preserved.

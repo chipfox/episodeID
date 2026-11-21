@@ -44,16 +44,12 @@ def parse_filename_episodes(name: str) -> list[str]:
 
 FEW_REFS = 5          # below this many references a match needs to be plainly that episode
 PLAINLY_SAME = 0.35   # (= references.SAME_EPISODE_SCORE) similarity of the same episode
-HALF_WIN = 0.5        # a half of a shared subtitle must hold this much of the file
-HALF_RATIO = 2.0      # ...and by this margin over the other half
-HALF_COVER = 0.6      # the winning half must itself lie this mostly inside the file
-HALF_FILE_SHARE = 0.7 # above this share of the shared text the file IS both episodes
-
 _EPNUM = re.compile(r"S(\d+)E(\d+)")
 
 
 class Matcher:
-    def __init__(self, refs: dict[str, str], settings: dict, background: list[str] | None = None):
+    def __init__(self, refs: dict[str, str], settings: dict, background: list[str] | None = None,
+                 anchors: dict[str, str] | None = None):
         """background: the series' own files' dialogue. Word weights are learned from it as
         well as from the references, so what every episode says (the characters' names,
         catchphrases, the theme song) counts for little. With only a few references that
@@ -63,6 +59,8 @@ class Matcher:
         self.codes = sorted(refs)
         self.index = {code: i for i, code in enumerate(self.codes)}
         self.refs = {code: refs[code] for code in self.codes}
+        self.anchors = {c: textsim.bigrams(text) for c, text in (anchors or {}).items()}
+        self._span_cache: dict[str, tuple[str, str] | None] = {}
         self._pair_cache: dict[tuple[str, str], float] = {}
         self.s = settings
         docs = [refs[c] for c in self.codes] + [t for t in background or [] if t.strip()]
@@ -112,49 +110,102 @@ class Matcher:
                 return other
         return None
 
-    def _half_position(self, text: str, words: int, top: str | None, twin: str | None):
-        """Which twin's episode a file is, by WHERE it matches the shared subtitle.
+    @staticmethod
+    def _words(text: str) -> list[str]:
+        return re.findall(r"[a-z][a-z']+", textsim.norm(text))
 
-        A two-parter released as one OpenSubtitles text filed under both codes is
-        really two episodes' dialogue in broadcast order: the earlier episode is
-        the first half of the text. So a file whose dialogue falls in one half
-        IS that episode, even though the whole text cannot say which. Returns
-        (winner, earlier, later, (first_half_score, second_half_score)), or None
-        when the halves do not settle it — both halves matching means the file
-        carries the double episode and must not be pinned to one.
-        """
-        from .references import DUP_MIN_BIGRAMS
-        if not top or not twin or top not in self.refs or twin not in self.refs:
+    @staticmethod
+    def _boundary(words: list[str], first: set, second: set) -> int | None:
+        """Boundary between two independently labeled, mostly separate word-pair runs."""
+        a, b = first - second, second - first
+        positions = [{}, {}]
+        for i, gram in enumerate(zip(words, words[1:])):
+            if gram in a:
+                positions[0].setdefault(gram, i)
+            elif gram in b:
+                positions[1].setdefault(gram, i)
+        left, right = (sorted(p.values()) for p in positions)
+        if min(len(left), len(right)) < textsim.BIGRAM_FLOOR:
             return None
-        m_top, m_twin = _EPNUM.match(top), _EPNUM.match(twin)
-        if not (m_top and m_twin):
+        end, start = left[int(0.95 * (len(left) - 1))], right[int(0.05 * (len(right) - 1))]
+        return (end + start) // 2 + 1 if end < start else None
+
+    def _verified_pair(self, code: str) -> tuple[str, str] | None:
+        if code not in self._span_cache:
+            words = self._words(self.refs[code])
+            grams = set(zip(words, words[1:]))
+            hits = [c for c, g in self.anchors.items() if len(g) >= textsim.BIGRAM_FLOOR
+                    and len(g) <= 0.78 * len(grams) and textsim.containment(g, grams) >= 0.72]
+            pairs = [(a, b) for a in hits for b in hits if a != b
+                     and textsim.overlap(self.anchors[a], self.anchors[b]) < 0.25
+                     and self._boundary(words, self.anchors[a], self.anchors[b]) is not None]
+            self._span_cache[code] = pairs[0] if len(pairs) == 1 else None
+        return self._span_cache[code]
+
+    def _combined(self, cues: list, duration: float, top: str, twin: str | None,
+                  ordinary: list[dict]) -> tuple[dict, list[dict]] | None:
+        pair = self._verified_pair(top) if self.anchors else None
+        if not pair:
+            # Identical adjacent references suggest a combined release but do not
+            # establish the order (or even that there are two different episodes).
+            a, b = _EPNUM.fullmatch(top), _EPNUM.fullmatch(twin or "")
+            shared = (a and b and a[1] == b[1] and abs(int(a[2]) - int(b[2])) == 1
+                      and self._reference_similarity(top, twin) >= 0.97)
+            if shared:
+                return {"state": "unresolved", "reference": top}, ordinary
             return None
-        (s1, e1), (s2, e2) = m_top.groups(), m_twin.groups()
-        if s1 != s2 or abs(int(e1) - int(e2)) != 1:
-            return None  # adjacent codes are double episodes; distant ones are duplicate listings
-        ga, gb = textsim.bigrams(self.refs[top]), textsim.bigrams(self.refs[twin])
-        dup = float(self.s["reference_duplicate_similarity"])
-        if min(len(ga), len(gb)) < DUP_MIN_BIGRAMS or textsim.overlap(ga, gb) < dup:
-            return None  # not one text filed twice; halves would be two real episodes
-        earlier, later = (top, twin) if int(e1) < int(e2) else (twin, top)
-        words_ref = self.refs[earlier].split()
-        mid = len(words_ref) // 2
-        q = textsim.bigrams(text)
-        if len(q) < textsim.BIGRAM_FLOOR or len(words_ref) < 2 * textsim.BIGRAM_FLOOR:
-            return None
-        if words > HALF_FILE_SHARE * len(words_ref):
-            return None  # the file holds (nearly) the whole double's dialogue
-        c1 = textsim.containment(q, textsim.bigrams(" ".join(words_ref[:mid])))
-        c2 = textsim.containment(q, textsim.bigrams(" ".join(words_ref[mid:])))
-        winner, win, lose = ((earlier, c1, c2) if c1 >= c2 else (later, c2, c1))
-        # The winner's half must lie mostly INSIDE the file too: one wiki page
-        # filed under two numbers and a partial recording of only its first
-        # chapters scores one-sided direction with no episode-sized coverage.
-        cover = textsim.containment(textsim.bigrams(
-            " ".join(words_ref[:mid] if winner == earlier else words_ref[mid:])), q)
-        if win >= HALF_WIN and win >= HALF_RATIO * max(lose, 1e-9) and cover >= HALF_COVER:
-            return winner, earlier, later, (round(c1, 3), round(c2, 3))
-        return None
+        cue_words = [self._words(c[2]) for c in cues]
+        words = [w for tokens in cue_words for w in tokens]
+        q = set(zip(words, words[1:]))
+        first, second = (self.anchors[c] for c in pair)
+        mid = self._boundary(words, first, second)
+        reversed_mid = self._boundary(words, second, first)
+        if mid is None and reversed_mid is not None:
+            pair = pair[::-1]
+            first, second, mid = second, first, reversed_mid
+        evidence = {"state": "partial", "reference": top}
+        timed = [c for c, tokens in zip(cues, cue_words) if len(tokens) >= 2]
+        if (not duration or not q or not timed or timed[0][0] > 0.2 * duration
+                or timed[-1][1] < 0.80 * duration
+                or any(b[0] - a[1] > 0.30 * duration for a, b in zip(timed, timed[1:]))):
+            observed = []
+            for code, anchor, other in ((pair[0], first, second), (pair[1], second, first)):
+                if (textsim.containment(anchor, q) >= 0.6 and textsim.containment(q, anchor) >= 0.5
+                        and textsim.containment(other - anchor, q) <= 0.18 and timed):
+                    observed.append({"code": code, "start": round(timed[0][0], 1),
+                                     "end": round(timed[-1][1], 1), "confidence": "low",
+                                     "score": round(textsim.containment(q, anchor), 4),
+                                     "why": "This dialogue matched, but part of the file has no usable evidence"})
+            if observed:
+                return evidence, observed
+            return evidence, ordinary
+        idx = int(np.searchsorted(np.cumsum([len(t) for t in cue_words]), mid)) + 1 if mid else 0
+        if 0 < idx < len(cues):
+            cut = (cues[idx - 1][1] + cues[idx][0]) / 2
+            if 0.20 * duration <= cut <= 0.80 * duration:
+                parts = [(pair[0], first, second, words[:mid], 0.0, cut),
+                         (pair[1], second, first, words[mid:], cut, duration)]
+            else:
+                return evidence, ordinary
+        else:
+            parts = []
+            for code, own, other in ((pair[0], first, second), (pair[1], second, first)):
+                if textsim.containment(other, q) <= 0.18:
+                    parts.append((code, own, other, words, 0.0, duration))
+        if not parts:
+            return evidence, ordinary
+        segments = []
+        for code, anchor, other, chunk, start, end in parts:
+            grams = set(zip(chunk, chunk[1:]))
+            score = textsim.containment(grams, anchor)
+            if (score < 0.5 or textsim.containment(anchor, grams) < 0.6
+                    or textsim.containment(other - anchor, grams) > 0.18):
+                return evidence, ordinary
+            segments.append({"code": code, "start": round(start, 1), "end": round(end, 1),
+                             "score": round(score, 4), "confidence": "high", "alternatives": [],
+                             "words": len(chunk), "evidence": "verified reference span",
+                             "why": "Distinct labeled dialogue within the combined reference"})
+        return {**evidence, "state": "verified", "codes": [s["code"] for s in segments]}, segments
 
     # ------------------------------------------------------------------
     def match_file(self, cues: list, duration: float) -> dict:
@@ -255,28 +306,13 @@ class Matcher:
                 out[-1]["score"] = max(out[-1]["score"], sg["score"])
             else:
                 out.append(sg)
-        # A shared double-episode subtitle cannot say which half was read — but
-        # WHERE in it the file matched does. When one half holds the dialogue,
-        # that half's episode replaces the twins: one high segment over the file,
-        # and the conflict veto lifts because the position IS the proof.
-        half = self._half_position(whole_text, evidence["words"],
-                                   evidence["top1"], evidence["twin"])
-        if half:
-            winner, earlier, later, (c1, c2) = half
-            which = "first" if winner == earlier else "second"
-            out = [{
-                "start": 0.0, "end": round(end_t, 1), "code": winner,
-                "score": max(c1, c2), "margin": abs(c1 - c2),
-                "confidence": "high", "alternatives": [],
-                "words": evidence["words"],
-                "why": f"matched the {which} half of the {earlier}+{later} "
-                       f"shared subtitle ({c1} vs {c2})",
-            }]
-            evidence["top1"] = winner
-            evidence["conflicted"] = False
-            evidence["twin"] = None
-            evidence["half"] = {"codes": [earlier, later], "winner": winner,
-                                "halves": [c1, c2]}
+        combined = (self._combined(cues, end_t, top1, evidence["twin"], out)
+                    if top1 and evidence["top1_score"] >= self.s["min_score"] else None)
+        if combined:
+            evidence["combined"], out = combined
+            evidence["conflicted"] = evidence["combined"]["state"] != "verified"
+            if evidence["conflicted"]:
+                out = [{**sg, "confidence": "low"} for sg in out]
         return {"segments": out, "whole": whole, "evidence": evidence}
 
     def _viterbi(self, S: np.ndarray) -> list[int | None]:

@@ -1161,6 +1161,12 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
         if (not chosen or chosen["kind"] not in ("rename", "split")
                 or chosen["kind"] != proposal.get("action", "rename")):
             raise HTTPException(409, "The proposal no longer produces the expected file change.")
+        if chosen["kind"] == "split":
+            segments = chosen["segments"]
+            next(c for c in changed if c["source"] == source)["approximate_cuts"] = [
+                round((float(a["end"]) + float(b["start"])) / 2, 1)
+                for a, b in zip(segments, segments[1:])
+            ]
         root = Path(series["path"])
         try:
             video = safe_media_path(root / source)

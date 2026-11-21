@@ -379,14 +379,15 @@ def _scored_sample_window(video: Path, matcher: Matcher, start: float, duration:
                 "text": text}
     match_duration = float(data.get("duration") or duration)
     result = matcher.match_file(cues, match_duration)
+    combined = (_evidence(result) or {}).get("combined")
     _discount_unreferenced(result.get("segments") or [], expected, match_duration, refs)
     result["segments"] = _story_parts(result.get("segments") or [], expected, eps, match_duration)
     votes: list[dict] = []
     for segment in result.get("segments") or []:
-        if segment.get("confidence") == "high" and segment.get("code"):
+        if not combined and segment.get("confidence") == "high" and segment.get("code"):
             votes.append({**segment, "evidence": segment.get("evidence") or "segment"})
     whole_candidate = _candidate_from_top(result.get("whole") or [], settings, len(matcher.codes))
-    if whole_candidate:
+    if whole_candidate and not combined:
         votes.append(whole_candidate)
     deduped: dict[str, dict] = {}
     for vote in votes:
@@ -740,8 +741,14 @@ def job_scan(ctx, params):
     if note:
         ctx.log(note)
 
-    refs = {c: r["text"] for c, r in load_refs(series["tvdb_id"]).items()
-            if c in eps and (include_specials or eps[c]["season"] > 0)}
+    labeled_refs = {c: r for c, r in load_refs(series["tvdb_id"]).items()
+                    if c in eps and (include_specials or eps[c]["season"] > 0)}
+    refs = {c: r["text"] for c, r in labeled_refs.items()}
+    anchors = {c: refs[c] for c, r in labeled_refs.items()
+               if (r.get("source") == "fandom" and r.get("page")
+                   and norm_title(r["page"].split("/")[0]) == norm_title(eps[c].get("title") or ""))
+               or (str(r.get("source", "")).startswith("manual:")
+                   and parse_filename_episodes(r["source"][len("manual:"):]) == [c])}
     ctx.log(f"References available for {len(refs)} of "
             f"{sum(1 for e in eps.values() if include_specials or e['season'] > 0)} episodes.")
     if not refs:
@@ -781,7 +788,7 @@ def job_scan(ctx, params):
                 c = cached_dialogue(v)
                 if c and c.get("cues"):
                     background.append(" ".join(x[2] for x in c["cues"]))
-    matcher = Matcher(refs, s, background) if refs else None
+    matcher = Matcher(refs, s, background, anchors=anchors) if refs else None
     if matcher and len(refs) < 5:
         ctx.log(f"Only {len(refs)} reference(s): a dialogue match only counts when it's plainly that episode.")
     lex = None
@@ -820,7 +827,9 @@ def job_scan(ctx, params):
         res["segments"] = promote(expected, res["segments"], _evidence(res),
                                   dlg["duration"])
         _discount_unreferenced(res["segments"], expected, dlg["duration"], refs)
-        res["segments"] = _story_parts(res["segments"], expected, eps, dlg["duration"])
+        _guard_combined_match(res, expected, dlg)
+        if not (_evidence(res) or {}).get("combined"):
+            res["segments"] = _story_parts(res["segments"], expected, eps, dlg["duration"])
         sampled = dlg.get("scope") == "sample"
         if sampled:
             # Keep the matcher's real high/low result. A high sample match can
@@ -837,7 +846,8 @@ def job_scan(ctx, params):
                 note = f"Sample of {dlg['duration'] / 60:.0f} min — suggested match needs review"
             else:
                 note = f"Sample of {dlg['duration'] / 60:.0f} min — weak sample evidence"
-        entry = {"rel": rel, "size": v.stat().st_size, "duration": dlg["duration"],
+        stat = v.stat()
+        entry = {"rel": rel, "size": stat.st_size, "duration": dlg["duration"],
                  "text_source": dlg["source"], "expected": expected,
                  "scope": dlg.get("scope") or "full",
                  "sample_start": dlg.get("sample_start"),
@@ -845,7 +855,7 @@ def job_scan(ctx, params):
                  "file_duration": dlg.get("file_duration"),
                  "sample_text": dialogue_text(dlg["cues"], limit=20_000) if sampled else "",
                  "segments": res["segments"], "whole": res["whole"],
-                 "evidence": res.get("evidence"),
+                 "evidence": res.get("evidence"), "mtime_ns": stat.st_mtime_ns,
                  "status": status, "note": note}
         if dlg.get("language") and not sampled:
             entry["language"] = dlg["language"]
@@ -941,6 +951,21 @@ def job_scan(ctx, params):
     assert series_now is not None and fresh_scan is not None
     items = build_plan(series_now, fresh_scan["results"])
     prev_plan = db.latest_plan(series["id"]) or {}
+    if params.get("only") and prev_plan.get("status") == "draft":
+        # Checking a few files again must not re-tick unchanged actions the user
+        # explicitly unchecked. Stage new actions in a targeted rescan unticked.
+        def key(it):
+            return (it["kind"], tuple(it.get("sources") or [it["source"]]),
+                    tuple(t["path"] for t in it.get("targets") or []))
+
+        old = {key(it): it for it in prev_plan["items"]}
+        rescanned = {rel for _path, rel, _dlg, _error in read}
+        for it in items:
+            item_key = key(it)
+            previous = old.get(item_key) or {}
+            it["selected"] = bool(previous.get("selected"))
+            if previous.get("cuts") and rescanned.isdisjoint(item_key[1]):
+                it["cuts"] = previous["cuts"]
     _mark_changes(items, prev_plan.get("items") or [], ctx)
     plan_id = db.add_plan(series["id"], scan_id, items)
     kept = db.prune_history(series["id"])
@@ -1016,6 +1041,30 @@ def _discount_unreferenced(segs: list[dict], expected: list[str], duration: floa
         sg.update(confidence="low", no_ref_for=cands[0],
                   why=f"{' / '.join(cands)} (per the filename) has no reference yet, so the "
                       f"dialogue could only match other episodes — {sg['code']} was the closest")
+
+
+def _guard_combined_match(result: dict, expected: list[str], dialogue: dict) -> None:
+    ev = _evidence(result)
+    if ev is None:
+        return
+    segments = result["segments"]
+    combined = ev.get("combined")
+    if not combined and (any(sg.get("broad_ref") for sg in segments)
+                         or (len(expected) > 1 and len(segments) == 1
+                             and segments[0].get("confidence") == "high")):
+        combined = ev["combined"] = {"state": "unresolved", "reference": ev.get("top1")}
+    if not combined:
+        return
+    if (combined["state"] == "verified"
+            and (dialogue.get("scope") == "sample" or dialogue.get("language")
+                 or not str(dialogue.get("source") or "").startswith(("embedded ", "remote ", "whisper "))
+                 or (len(expected) > 1 and len(combined["codes"]) < len(expected)))):
+        combined["state"] = "partial"
+        combined.pop("codes", None)
+    if combined["state"] != "verified":
+        ev["conflicted"] = True
+        for sg in segments:
+            sg["confidence"] = "low"
 
 
 def _release_name_pass(series: dict, files: list[dict], ctx) -> None:
@@ -1884,8 +1933,10 @@ def _full_escalation_pass(series, files, matcher, eps, refs, ctx, lex, videos_by
                                   _evidence(res), dlg["duration"])
         _discount_unreferenced(res["segments"], f.get("expected") or [], dlg["duration"],
                                refs or {})
-        res["segments"] = _story_parts(res["segments"], f.get("expected") or [], eps,
-                                       dlg["duration"])
+        _guard_combined_match(res, f.get("expected") or [], dlg)
+        if not (_evidence(res) or {}).get("combined"):
+            res["segments"] = _story_parts(res["segments"], f.get("expected") or [], eps,
+                                           dlg["duration"])
         status, note = classify(f.get("expected") or [], res["segments"], dlg["source"],
                                 _evidence(res))
         f.update({"scope": "full", "duration": dlg["duration"], "text_source": dlg["source"],
@@ -2150,6 +2201,8 @@ def job_apply(ctx, params):
         raise RuntimeError("Plan not found")
     if plan["status"] != "draft":
         raise RuntimeError("This plan was already applied. Rescan to make a new plan.")
+    if (db.latest_plan(series["id"]) or {}).get("id") != plan["id"]:
+        raise RuntimeError("This is no longer the latest draft. Reload before applying changes.")
     result = apply_plan(series, plan, ctx)
     autocheck.record(series)
     if result.get("applied"):
