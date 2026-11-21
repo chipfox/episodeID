@@ -101,6 +101,9 @@ url = f"/api/plans/{pid}/items/{rows[0]['id']}/proposal"
 preview = client.post(url, json={})
 assert preview.status_code == 200, preview.text
 assert db.get_series(sid)["options"] == {}  # preview is nonpersistent
+_save(999202, broad, {"source": "opensubtitles", "text": ref + " different reference edition"})
+assert client.post(url, json={"token": preview.json()["token"]}).status_code == 409
+_save(999202, broad, {"source": "opensubtitles", "text": ref})
 done = client.post(url, json={"token": preview.json()["token"]})
 assert done.status_code == 200, done.text
 row = done.json()["items"][0]

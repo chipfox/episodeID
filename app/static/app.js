@@ -1293,7 +1293,7 @@ async function evidenceDialog(rel, code, focus = "") {
     <div id="ev-focus" class="wrap-row"></div>
     <div class="ev-grid">
       <div class="ev-col"><div class="ev-head"><b>File dialogue</b>
-        <span class="muted small">${esc(evMeta(f))}</span></div>
+        <span class="muted small" id="ev-file-meta">${esc(evMeta(f))}</span></div>
         <div class="muted small ev-src" title="${esc(f.source)}">${esc(f.source)}${sampled ? " · verdict used sample" : ""}</div></div>
       <div class="ev-col"><div class="ev-head"><b>Reference</b>
         <select id="ev-pick"></select></div>
@@ -1323,6 +1323,7 @@ async function evidenceDialog(rel, code, focus = "") {
       .filter((e) => e.code === pickCode(e.code))
       .map((e) => `<option value="${esc(e.code)}" ${e.code === next.code ? "selected" : ""}>${esc(e.has_ref ? refName(e.code) : e.code + (e.title ? " " + e.title : "") + " (no reference)")}${e.match && group(e.code).length <= 1 ? ` · ${e.match.score.toFixed(2)}` : ""}</option>`).join("");
     const r = next.reference;
+    $("#ev-file-meta", box).textContent = evMeta(next.file);
     const local = next.file.combined?.local;
     const gaps = next.file.combined?.remaining || [];
     const focusNav = $("#ev-focus", box);
@@ -1350,10 +1351,10 @@ async function evidenceDialog(rel, code, focus = "") {
       // Nothing to align against: give the file's dialogue the full width and
       // let the banner below say why there is no comparison.
       body.className = "";
-      body.innerHTML = `<pre class="ev-text">${esc(next.file.text || "(no transcript was read for this file)")}</pre>`;
+      body.innerHTML = `<pre class="ev-text">${esc(next.file.text || (next.file.focused ? "(no dialogue in this span)" : "(no transcript was read for this file)"))}</pre>`;
     } else {
       body.className = "ev-grid";
-      body.innerHTML = `<div class="ev-col"><pre class="ev-text">${esc(next.file.text || "(no transcript was read for this file)")}</pre></div>` +
+      body.innerHTML = `<div class="ev-col"><pre class="ev-text">${esc(next.file.text || (next.file.focused ? "(no dialogue in this span)" : "(no transcript was read for this file)"))}</pre></div>` +
         `<div class="ev-col"><pre class="ev-text">${esc(r ? r.text : "(no reference)")}</pre></div>`;
     }
     const lines = [];

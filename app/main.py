@@ -748,7 +748,7 @@ def evidence_view(sid: int, rel: str = "", code: str = "", focus: str = "", part
                 data = {}
             selected = [cue for cue in data.get("cues") or []
                         if cue[1] > target["start"] and cue[0] < target["end"]]
-            if selected:
+            if data.get("cues"):
                 text = dialogue_text(selected, limit=400_000)
                 start, end = target["start"], target["end"]
                 focused = {"kind": focus, "start": start, "end": end}
@@ -775,7 +775,7 @@ def evidence_view(sid: int, rel: str = "", code: str = "", focus: str = "", part
     ref_text = str(ref.get("text") or "")
     local = combined.get("local") or {}
     passage = (focus == "matched" and bool(local) and local.get("reference") == chosen
-               and bool(ref_text))
+               and bool(ref_text) and local.get("reference_id") == spanmatch.reference_id(ref_text))
     if passage:
         ref_text = spanmatch.reference_passage(ref_text, local)
     matches = episode_match(series)
@@ -1158,6 +1158,11 @@ def proposal_action(pid: int, iid: int, body: ProposalApproval):
         proposal = (item or {}).get("proposal")
         if not proposal or item.get("pv") != PLAN_VERSION:
             raise HTTPException(409, "This row has no current proposal. Reload the plan.")
+        local = (item.get("combined") or {}).get("local") or {}
+        if local:
+            reference = load_refs(series["tvdb_id"]).get(local.get("reference"), {}).get("text") or ""
+            if local.get("reference_id") != spanmatch.reference_id(reference):
+                raise HTTPException(409, "The reference changed since this scan. Rescan before approving.")
         source = item["source"]
         options = dict(series["options"] or {})
         options["overrides"] = {**(options.get("overrides") or {}), source: proposal["codes"]}

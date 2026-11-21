@@ -1,6 +1,7 @@
 """Ordered dialogue overlap. A reference match is not an episode label."""
 from bisect import bisect_left
 from collections import Counter
+import hashlib
 import re
 
 from . import textsim
@@ -12,6 +13,10 @@ MIN_COVERAGE = .48
 
 def _words(text):
     return TOKEN.findall(textsim.norm(text))
+
+
+def reference_id(text):
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _chain(points):
@@ -119,6 +124,7 @@ def inspect(matcher, result, dialogue, expected, combined):
     if not passages:
         return None
     local = max(passages, key=lambda p: (p["whole_file"], p["pairs"]))
+    local["reference_id"] = reference_id(matcher.refs[local["reference"]])
     combined["local"] = local
     # Sidecar and sample text can be compared but cannot assign a label or a cut.
     if (dialogue.get("scope") == "sample" or dialogue.get("language")
