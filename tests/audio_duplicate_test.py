@@ -45,6 +45,12 @@ right = shifted(left)
 with patch.object(fingerprints, "_fingerprints", side_effect=[left, right]):
     assert fingerprints.compare(root, a, b) == "equivalent"
 with patch.object(fingerprints, "_fingerprints", side_effect=[left, list(reversed(right))]):
+    assert fingerprints.compare(root, a, b) != "equivalent"
+with patch.object(fingerprints, "_fingerprints", side_effect=[left, [right[0], right[1], *left[1:4]]]), \
+        patch.object(fingerprints, "_align", side_effect=[(.90, 0), (.88, 20), (.81, 0), (.84, 5), (.87, 2)]):
+    assert fingerprints.compare(root, a, b) == "overlap"
+with patch.object(fingerprints, "_fingerprints", side_effect=[left, right]), \
+        patch.object(fingerprints, "_align", return_value=(.60, fingerprints.MAX_SHIFT)):
     assert fingerprints.compare(root, a, b) == "inconclusive"
 with patch.object(fingerprints, "_fingerprints", side_effect=[left, [[0] * 620] * 5]):
     assert fingerprints.compare(root, a, b) == "inconclusive"
@@ -64,8 +70,9 @@ class Context:
 
 
 with patch("app.fingerprints.compare", return_value="equivalent") as probe:
-    scan["audio_pairs"] = probe_audio_pairs(root, initial, scan["files"], Context())
-    probe.assert_called_once_with(root, a, b)
+    ctx = Context()
+    scan["audio_pairs"] = probe_audio_pairs(root, initial, scan["files"], ctx)
+    probe.assert_called_once_with(root, a, b, check_cancel=ctx.check_cancel)
     plan = build_plan(series, scan)
     assert probe.call_count == 1  # rebuilding the plan does not decode media
 assert len([i for i in plan if i["kind"] == "review"]) == 1

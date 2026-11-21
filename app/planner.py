@@ -680,8 +680,8 @@ def probe_audio_pairs(root: Path, items: list[dict], files: list[dict], ctx) -> 
         if (pair["source_id"][:2] != [a.get("size"), a.get("mtime_ns")]
                 or pair["rival_id"][:2] != [b.get("size"), b.get("mtime_ns")]):
             continue
-        result = compare(root, a, b)
-        if result in ("equivalent", "different") and audio_pair_current(root, source, pair):
+        result = compare(root, a, b, check_cancel=ctx.check_cancel)
+        if result in ("equivalent", "different", "overlap") and audio_pair_current(root, source, pair):
             found[source] = {**pair, "result": result}
     return found
 
@@ -1352,7 +1352,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
                 }[relation]
                 audio_candidate = (rival["rel"] if rival and relation in ("unknown", "partial")
                                    and codes == base["expected"] == (rival.get("expected") or [])
-                                   and not sample_only and not ai and not manual
+                                   and not ai and not manual
+                                   and (not sample_only or (len(codes) == 1 and f.get("file_duration")))
                                    and not f.get("reference_conflict") and not f.get("story_pair_overlap")
                                    else None)
                 items.append({**base, "kind": "review",
@@ -1564,7 +1565,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
     for it in items:
         rival = it.pop("audio_candidate", None)
         other = by_rel.get(rival)
-        if (it["kind"] != "review" or not other or other["kind"] != "ok" or other.get("sample")
+        if (it["kind"] != "review" or not other or other["kind"] != "ok"
+                or (other.get("sample") and len(it["expected"]) != 1)
                 or it["duration_check"]["state"] in ("warn", "fail")
                 or any((meta.get(c) or {}).get("low_trust") for c in it["expected"])):
             continue
@@ -1574,6 +1576,8 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
             continue
         if pair["result"] == "different":
             it["reason"] += ". No audio match in the sampled windows. This does not rule out a different cut."
+        elif pair["result"] == "overlap":
+            it["reason"] += ". Shared audio, but the windows do not establish the same cut."
         elif pair["result"] == "equivalent":
             it["audio_pair"] = pair
             if approved.get(it["source"]) == pair:
