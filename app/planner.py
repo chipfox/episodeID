@@ -481,7 +481,9 @@ def _eliminate(items, eps, root, layout, s, series_name, year) -> None:
     for it in items:
         for c in it.get("expected") or []:
             named.setdefault(c, []).append(it)
-    unsettled = [it for it in items if it["kind"] == "review" and not it.get("combined")
+    unsettled = [it for it in items if it["kind"] == "review"
+                 and (not it.get("combined") or (it["combined"]["state"] == "unresolved"
+                      and any(sg.get("broad_ref") for sg in it["segments"])))
                  and len(it.get("expected") or []) <= 1
                  and not it.get("sample") and not strong_other(it) and not it.get("claimed_by")]
 
@@ -508,6 +510,8 @@ def _eliminate(items, eps, root, layout, s, series_name, year) -> None:
             it.update(kind="ok", reason=f"Correct — {why} (as named)", elimination=True)
             covered.add(code)
             continue
+        if it.get("combined"):
+            continue  # local context can corroborate the name, not authorize a new one
         src = root / it["source"]
         name = episode_filename(series_name, [eps[code]], src.suffix, src.name, s, year)
         dst = str((season_dir(root, n, s, layout) / name).relative_to(root))
@@ -1119,6 +1123,19 @@ def build_plan(series: dict, scan: dict) -> list[dict]:
 
         combined = _combined(f)
         if combined:
+            # For a single file with no reference, an oversized *other*
+            # reference is not contrary evidence. Keep the existing calibrated
+            # same-name fallback, but never let it override a verified span.
+            sm = f.get("summary_match") or {}
+            expected = base["expected"]
+            if (combined["state"] == "unresolved" and len(expected) == 1
+                    and any(sg.get("broad_ref") for sg in segs)
+                    and sm.get("mode") == "auto" and sm.get("auto") and sm.get("passes")
+                    and sm.get("code") == expected[0]):
+                items.append({**base, "combined": combined, "kind": "ok", "decided_by": "summary",
+                              "reason": f"Correct — calibrated summary agrees with {expected[0]}; "
+                                        "the broader reference could not supply an episode label"})
+                continue
             codes = combined.get("codes") or []
             verified = (combined["state"] == "verified" and codes
                         and not sample_only and [c[1] for c in chosen] == codes

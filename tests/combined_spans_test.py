@@ -78,6 +78,14 @@ assert plan_row(single, [late], 1200)["kind"] == "review"
 assert plan_row(result, [early, late], 1200, scope="sample")["kind"] == "review"
 assert "unresolved" in plan_row(one_code, [early, late], 1200)["reason"]
 
+# A broad unrelated reference isn't evidence against a calibrated match to the
+# existing name. A summary suggesting *another* number must not change it.
+broad_only = {"evidence": {"combined": {"state": "unresolved", "reference": broad}},
+              "segments": [{"code": broad, "confidence": "low", "score": .2, "broad_ref": True}],
+              "summary_match": {"mode": "auto", "passes": True, "auto": True, "code": late}}
+assert plan_row(broad_only, [late], 600)["decided_by"] == "summary"
+assert plan_row(broad_only, [early], 600)["kind"] == "review"
+
 confirmed = [{"rel": f"Show - S09E{n:02d}.mkv", "expected": [f"S09E{n:02d}"],
               "duration": 600, "status": "OK", "text_source": "embedded #1",
               "segments": [{"code": f"S09E{n:02d}", "confidence": "high", "score": 0.8}]}
