@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 W = Path(os.environ.get("EPID_TEST_DIR", "/tmp/epid_spanmatch"))
 os.environ.update(MEDIA_ROOT=str(W / "media"), CONFIG_DIR=str(W / "config"), CACHE_DIR=str(W / "cache"))
@@ -14,7 +15,7 @@ from app.planner import build_plan  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.matcher import Matcher  # noqa: E402
 from app.media_text import _cache_file  # noqa: E402
-from app.pipeline import _guard_combined_match, _label_local_from_card  # noqa: E402
+from app.pipeline import _guard_combined_match, _label_local_from_card, _read_dialogues  # noqa: E402
 from app.references import _save  # noqa: E402
 
 
@@ -112,6 +113,15 @@ row = done.json()["items"][0]
 assert row["kind"] == "ok" and not row["selected"] and not row.get("targets")
 assert row["confirmed_on"] and "overrides" not in db.get_series(sid)["options"]
 assert build_plan(db.get_series(sid), scan)[0]["kind"] == "ok"
+with patch("app.pipeline._sample_eligible", return_value=True), \
+        patch("app.pipeline.sample_dialogue") as sample, \
+        patch("app.pipeline.get_dialogue", return_value=keep_data) as whole:
+    settings = {"transcribe_workers": 1}
+    memory_paths = set(db.get_series(sid)["options"]["confirmations"])
+    read = _read_dialogues([video], root, settings, {}, {}, True, 10, Mock(), keep_full=memory_paths)
+    assert read[0][2] == keep_data and read[0][3] is None
+    whole.assert_called_once()
+    sample.assert_not_called()
 cache.write_text(json.dumps({**keep_data, "cues": cues(c)}))
 assert build_plan(db.get_series(sid), scan)[0]["kind"] == "review"
 cache.write_text(json.dumps(keep_data))

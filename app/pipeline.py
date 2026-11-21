@@ -636,7 +636,7 @@ def _summary_index_and_cal(series: dict, refs: dict[str, str], s: dict, ctx):
 
 
 def _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx,
-                    summary_refs: dict | None = None):
+                    summary_refs: dict | None = None, keep_full: set[str] | None = None):
     """Fetch every file's dialogue, returning (path, rel, dialogue, error) in file order.
 
     This is the only part of a scan that waits on the ASR server, and it is pure
@@ -658,7 +658,7 @@ def _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx,
             # episode, so read it full instead of sampling.
             summary_full = bool(summary_refs is not None
                                 and any(c not in summary_refs for c in expected))
-            if (fast and not params.get("full") and not summary_full
+            if (fast and not params.get("full") and not summary_full and rel not in (keep_full or ())
                     and _sample_eligible(v, expected, eps, runtime_min, s)):
                 dlg = sample_dialogue(v, ctx, allow_whisper=params.get("whisper", True),
                                       start=s["sample_start"],
@@ -777,7 +777,8 @@ def job_scan(ctx, params):
     # 1. Read every file's dialogue (cached unless new or replaced).
     read = _read_dialogues(videos, root, s, params, eps, fast, runtime_min, ctx,
                            summary_refs=refs if (summary_index and summary_cal
-                                                 and summary_cal.get("available")) else None)
+                                                 and summary_cal.get("available")) else None,
+                           keep_full=set(opts.get("confirmations") or {}))
     # 2. Match. Word weights come from the references and every file's dialogue.
     background = [" ".join(c[2] for c in dlg["cues"]) for _v, _r, dlg, _e in read if dlg and dlg["cues"]]
     if params.get("only"):
@@ -947,7 +948,7 @@ def job_scan(ctx, params):
         combined = (f.get("evidence") or {}).get("combined") or {}
         if combined and combined["state"] != "verified" and len(f.get("expected") or []) > 1:
             ctx.check_cancel()
-            combined["chapters"] = chapter_hints(videos_by_rel[f["rel"]], f.get("duration") or 0)
+            combined["chapters"] = chapter_hints(videos_by_rel[f["rel"]], f.get("file_duration") or f.get("duration") or 0)
 
     if params.get("only"):
         # Only some files were scanned: the rest keep what the last scan found (if they're
